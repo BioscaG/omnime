@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a defect in ATLAS
+about: Report a defect in OMNIME
 title: "[bug] "
 labels: bug
 ---

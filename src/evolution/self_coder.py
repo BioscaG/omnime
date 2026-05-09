@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-CODER_PROMPT = """You write Python skill modules for ATLAS, a personal AI assistant.
+CODER_PROMPT = """You write Python skill modules for OMNIME, a personal AI assistant.
 
 Existing base interface (already importable):
     from src.skills.base import BaseSkill, SkillResponse

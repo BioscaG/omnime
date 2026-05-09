@@ -21,7 +21,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     name = update.effective_user.first_name or "there"
     text = (
-        f"👋 Hi {name}, I'm ATLAS — your personal AI assistant.\n\n"
+        f"👋 Hi {name}, I'm OMNIME — your personal AI assistant.\n\n"
         "Tell me anything about yourself, your work, your ideas. I'll remember it.\n"
         "I can also generate CVs, draft emails, write documents, research topics,\n"
         "and give you a daily briefing.\n\n"

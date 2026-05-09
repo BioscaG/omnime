@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a new capability for ATLAS
+about: Suggest a new capability for OMNIME
 title: "[feature] "
 labels: enhancement
 ---
@@ -9,7 +9,7 @@ labels: enhancement
 What problem does this solve? What user need is unmet today?
 
 **Proposed solution**
-How would you like ATLAS to behave?
+How would you like OMNIME to behave?
 
 **Alternatives considered**
 Other approaches you've thought about.

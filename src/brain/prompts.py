@@ -62,7 +62,7 @@ def skill_prompt(name: str) -> dict[str, Any]:
     return _load_yaml(f"skill_prompts/{name}.yaml")
 
 
-DEFAULT_BASE_IDENTITY = """You are ATLAS, the personal AI assistant of {user_name}.
+DEFAULT_BASE_IDENTITY = """You are OMNIME, the personal AI assistant of {user_name}.
 Your goal is to be their digital twin: you know their history, their communication
 style, their projects, and you act on their behalf when asked.
 

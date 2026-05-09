@@ -47,9 +47,9 @@ class Settings(BaseSettings):
     # --- Database ---
     db_host: str = Field(default="postgres", alias="DB_HOST")
     db_port: int = Field(default=5432, alias="DB_PORT")
-    db_name: str = Field(default="atlas", alias="DB_NAME")
-    db_user: str = Field(default="atlas", alias="DB_USER")
-    db_password: str = Field(default="atlas", alias="DB_PASSWORD")
+    db_name: str = Field(default="omnime", alias="DB_NAME")
+    db_user: str = Field(default="omnime", alias="DB_USER")
+    db_password: str = Field(default="omnime", alias="DB_PASSWORD")
 
     # --- ChromaDB ---
     chroma_host: str = Field(default="chromadb", alias="CHROMA_HOST")

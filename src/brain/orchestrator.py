@@ -150,7 +150,7 @@ class Orchestrator:
         if self.evolution_engine is None:
             return Response(
                 text="Self-evolution isn't enabled in this build. "
-                     "Configure GITHUB_TOKEN to allow ATLAS to write new skills.",
+                     "Configure GITHUB_TOKEN to allow OMNIME to write new skills.",
                 intent=Intent.EVOLVE,
             )
         return await self.evolution_engine.handle(user_id=user_id, message=message, context=context)

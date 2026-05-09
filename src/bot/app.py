@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 COMMAND_DESCRIPTIONS = [
-    ("start", "Initialize ATLAS"),
-    ("me", "Show everything ATLAS knows about you"),
+    ("start", "Initialize OMNIME"),
+    ("me", "Show everything OMNIME knows about you"),
     ("search", "Search your memory"),
     ("projects", "List your projects"),
     ("cv", "Generate your CV"),
@@ -35,9 +35,9 @@ COMMAND_DESCRIPTIONS = [
     ("email", "Compose an email"),
     ("briefing", "Get your daily briefing"),
     ("export", "Export your data"),
-    ("skills", "List ATLAS capabilities"),
+    ("skills", "List OMNIME capabilities"),
     ("evolve", "Add a new capability"),
-    ("settings", "Configure ATLAS"),
+    ("settings", "Configure OMNIME"),
     ("backup", "Create a backup"),
 ]
 

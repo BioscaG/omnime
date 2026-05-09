@@ -1,3 +1,3 @@
-"""ATLAS — personal AI assistant."""
+"""OMNIME — personal AI assistant."""
 
 __version__ = "0.1.0"

@@ -1,4 +1,4 @@
-"""ATLAS entry point."""
+"""OMNIME entry point."""
 from __future__ import annotations
 
 import logging
@@ -15,7 +15,7 @@ def main() -> None:
     configure_logging()
     settings.ensure_directories()
 
-    logger.info("Booting ATLAS — provider=%s mode=%s", settings.llm_provider, settings.telegram_mode)
+    logger.info("Booting OMNIME — provider=%s mode=%s", settings.llm_provider, settings.telegram_mode)
     if not settings.telegram_bot_token:
         raise SystemExit("TELEGRAM_BOT_TOKEN missing in environment")
     if not settings.telegram_user_id:

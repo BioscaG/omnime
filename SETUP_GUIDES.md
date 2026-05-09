@@ -1,4 +1,4 @@
-# ATLAS — Detailed setup guides
+# OMNIME — Detailed setup guides
 
 This document covers the optional integrations. The bot works without them;
 follow the relevant section only if you want that feature.
@@ -21,7 +21,7 @@ nobody else can interact with your data.
 
 ## Anthropic / OpenAI / Ollama
 
-ATLAS supports three providers, picked via `LLM_PROVIDER`:
+OMNIME supports three providers, picked via `LLM_PROVIDER`:
 
 | Provider  | Setup                                                           |
 |-----------|-----------------------------------------------------------------|
@@ -30,7 +30,7 @@ ATLAS supports three providers, picked via `LLM_PROVIDER`:
 | ollama    | Run `ollama serve` locally; set `OLLAMA_HOST` (default `http://localhost:11434`) and `OLLAMA_MODEL`. |
 
 You can also configure a fallback provider with `LLM_FALLBACK_PROVIDER` and
-`LLM_FALLBACK_MODEL`. ATLAS will retry the primary, then switch automatically.
+`LLM_FALLBACK_MODEL`. OMNIME will retry the primary, then switch automatically.
 
 ---
 
@@ -74,10 +74,10 @@ GCAL_REFRESH_TOKEN=...
 
 1. Create a personal access token at
    https://github.com/settings/tokens with the `repo` scope.
-2. Create a private repo to host generated skills (e.g. `you/atlas-skills`).
-3. Set `GITHUB_TOKEN` and `GITHUB_REPO=you/atlas-skills` in `.env`.
+2. Create a private repo to host generated skills (e.g. `you/omnime-skills`).
+3. Set `GITHUB_TOKEN` and `GITHUB_REPO=you/omnime-skills` in `.env`.
 
-When you `/evolve`, ATLAS will optionally commit the new skill to that repo
+When you `/evolve`, OMNIME will optionally commit the new skill to that repo
 once you approve.
 
 ---
@@ -102,11 +102,11 @@ The Dockerfile and `docker-compose.yml` are production-ready. Recommended:
 ssh user@your-vps
 sudo apt update && sudo apt install -y docker.io docker-compose-v2
 git clone <your repo>
-cd atlas
+cd omnime
 cp .env.example .env  # fill it in
 docker compose pull   # ensures latest postgres + chroma
 docker compose up -d
-docker compose logs -f atlas  # tail the bot
+docker compose logs -f omnime  # tail the bot
 ```
 
 For webhook mode (recommended in production), set:
@@ -124,5 +124,5 @@ Run `python -m scripts.backup` (or `/backup` in Telegram) to dump everything
 to `data/backups/backup_<timestamp>.json`. Restore with
 `python -m scripts.restore data/backups/backup_<timestamp>.json`.
 
-For Postgres-level backups, schedule `pg_dump` against the `atlas-db`
+For Postgres-level backups, schedule `pg_dump` against the `omnime-db`
 container externally.

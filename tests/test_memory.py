@@ -28,7 +28,7 @@ async def test_log_message_and_recent(memory_manager):
 async def test_process_and_store_extracts_project(fake_llm, memory_manager):
     fake_llm.responses["return only valid json"] = json.dumps({
         "projects": [{
-            "name": "ATLAS",
+            "name": "OMNIME",
             "description": "Personal AI assistant",
             "technologies": ["Python", "PostgreSQL"],
             "status": "active",
@@ -43,9 +43,9 @@ async def test_process_and_store_extracts_project(fake_llm, memory_manager):
         "user_profile_updates": {},
     })
     user_id = memory_manager.ensure_user(telegram_id=7)
-    result = await memory_manager.process_and_store(user_id, "I started ATLAS in Python")
+    result = await memory_manager.process_and_store(user_id, "I started OMNIME in Python")
     assert not result.extraction.is_empty()
     profile = memory_manager.get_user_profile(user_id)
     names = [p["name"] for p in profile["projects"]]
-    assert "ATLAS" in names
+    assert "OMNIME" in names
     assert any(s["name"] == "Python" for s in profile["skills"])

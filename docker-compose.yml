@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  atlas:
+  omnime:
     build: .
-    container_name: atlas-bot
+    container_name: omnime-bot
     restart: unless-stopped
     env_file: .env
     depends_on:
@@ -17,29 +17,29 @@ services:
       - ./data/uploads:/app/data/uploads
       - ./prompts:/app/prompts
     networks:
-      - atlas-net
+      - omnime-net
 
   postgres:
     image: postgres:16-alpine
-    container_name: atlas-db
+    container_name: omnime-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${DB_NAME:-atlas}
-      POSTGRES_USER: ${DB_USER:-atlas}
+      POSTGRES_DB: ${DB_NAME:-omnime}
+      POSTGRES_USER: ${DB_USER:-omnime}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-atlas}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-omnime}"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
-      - atlas-net
+      - omnime-net
 
   chromadb:
     image: chromadb/chroma:0.5.23
-    container_name: atlas-vectors
+    container_name: omnime-vectors
     restart: unless-stopped
     volumes:
       - chroma_data:/chroma/chroma
@@ -47,12 +47,12 @@ services:
       - ANONYMIZED_TELEMETRY=FALSE
       - IS_PERSISTENT=TRUE
     networks:
-      - atlas-net
+      - omnime-net
 
 volumes:
   postgres_data:
   chroma_data:
 
 networks:
-  atlas-net:
+  omnime-net:
     driver: bridge

@@ -1,8 +1,8 @@
-# ATLAS — Your AI-Powered Digital Twin
+# OMNIME — Your AI-Powered Digital Twin
 
 > **A self-hosted personal AI assistant that lives in Telegram, remembers everything about your life, and acts on your behalf.**
 
-ATLAS learns who you are — your projects, skills, career history, contacts, ideas, and life events — and uses that knowledge to help you: generate tailored CVs, draft emails in your voice, prepare for interviews, track your goals, and much more. It even evolves itself by writing and deploying new capabilities on demand.
+OMNIME learns who you are — your projects, skills, career history, contacts, ideas, and life events — and uses that knowledge to help you: generate tailored CVs, draft emails in your voice, prepare for interviews, track your goals, and much more. It even evolves itself by writing and deploying new capabilities on demand.
 
 ---
 
@@ -10,12 +10,12 @@ ATLAS learns who you are — your projects, skills, career history, contacts, id
 
 ### 🧠 Persistent Memory System
 - **Structured storage** (PostgreSQL): Projects, work experience, skills, contacts, achievements, education — all organized and queryable
-- **Semantic search** (ChromaDB): Tell ATLAS anything in natural language. Later, ask "what was that ML project I worked on last summer?" and it finds it — even if you use completely different words
-- **Auto-extraction**: ATLAS automatically detects and stores entities from your messages — projects, people, skills, dates, achievements — without you having to organize anything
+- **Semantic search** (ChromaDB): Tell OMNIME anything in natural language. Later, ask "what was that ML project I worked on last summer?" and it finds it — even if you use completely different words
+- **Auto-extraction**: OMNIME automatically detects and stores entities from your messages — projects, people, skills, dates, achievements — without you having to organize anything
 - **Progressive summaries**: Periodic auto-generated summaries keep your "living profile" up to date
 
 ### 💬 Natural Telegram Interface
-- Talk to ATLAS like you'd talk to a friend — it understands context and intent
+- Talk to OMNIME like you'd talk to a friend — it understands context and intent
 - Send voice messages, documents, images — it processes everything
 - Inline buttons for confirmations before any external action
 - Works on phone and desktop simultaneously
@@ -36,7 +36,7 @@ ATLAS learns who you are — your projects, skills, career history, contacts, id
 - Customizable schedule and content
 
 ### 🔄 Self-Evolution
-- Ask ATLAS to add new capabilities: *"Add the ability to check cryptocurrency prices"*
+- Ask OMNIME to add new capabilities: *"Add the ability to check cryptocurrency prices"*
 - It writes the code, tests it in a sandbox, shows you the changes, and deploys on approval
 - Plugin-based architecture makes it easy to extend manually too
 
@@ -76,7 +76,7 @@ ATLAS learns who you are — your projects, skills, career history, contacts, id
 
 ### Design Philosophy
 
-- **One instance = one user.** Each person deploys their own ATLAS. Your data never leaves your server.
+- **One instance = one user.** Each person deploys their own OMNIME. Your data never leaves your server.
 - **Memory-first**: Every interaction attempts to extract and store useful information.
 - **Confirm before acting**: External actions (sending emails, committing code) always require explicit approval.
 - **Graceful degradation**: If a service fails (LLM API, ChromaDB), the bot continues with reduced capabilities.
@@ -99,8 +99,8 @@ ATLAS learns who you are — your projects, skills, career history, contacts, id
 3. Copy the bot token — you'll need it in step 3
 4. Send `/setcommands` to BotFather and paste:
    ```
-   start - Initialize ATLAS
-   me - Show everything ATLAS knows about you
+   start - Initialize OMNIME
+   me - Show everything OMNIME knows about you
    search - Search your memory
    projects - List your projects
    cv - Generate your CV
@@ -108,9 +108,9 @@ ATLAS learns who you are — your projects, skills, career history, contacts, id
    email - Compose an email
    briefing - Get your daily briefing
    export - Export your data
-   skills - List ATLAS capabilities
+   skills - List OMNIME capabilities
    evolve - Add a new capability
-   settings - Configure ATLAS
+   settings - Configure OMNIME
    backup - Create a backup
    ```
 
@@ -121,8 +121,8 @@ Message [@userinfobot](https://t.me/userinfobot) on Telegram — it will reply w
 ### 3. Configure environment
 
 ```bash
-git clone https://github.com/yourusername/atlas.git
-cd atlas
+git clone https://github.com/yourusername/omnime.git
+cd omnime
 cp .env.example .env
 ```
 
@@ -137,8 +137,8 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 # === DATABASE (defaults work with Docker) ===
 DB_HOST=postgres
 DB_PORT=5432
-DB_NAME=atlas
-DB_USER=atlas
+DB_NAME=omnime
+DB_USER=omnime
 DB_PASSWORD=change_this_to_a_secure_password
 
 # === CHROMADB (defaults work with Docker) ===
@@ -156,22 +156,22 @@ docker-compose up -d
 
 ### 5. Start talking
 
-Open Telegram, find your bot, send `/start`. That's it — start telling ATLAS about yourself.
+Open Telegram, find your bot, send `/start`. That's it — start telling OMNIME about yourself.
 
 ---
 
 ## 📖 Usage Guide
 
-### Telling ATLAS about yourself
+### Telling OMNIME about yourself
 
-Just talk naturally. ATLAS automatically detects and stores relevant information:
+Just talk naturally. OMNIME automatically detects and stores relevant information:
 
 ```
 You: "I just started a new job at Google as a Senior ML Engineer.
       We're building a recommendation system using PyTorch and
       working with the Search team led by Sarah Chen."
 
-ATLAS: "Got it! I've recorded:
+OMNIME: "Got it! I've recorded:
         📋 New position: Senior ML Engineer at Google
         🔧 Project: Recommendation system (PyTorch)
         👤 Contact: Sarah Chen (Search team lead, Google)
@@ -183,7 +183,7 @@ ATLAS: "Got it! I've recorded:
 ```
 You: /search machine learning projects
 
-ATLAS: "Here's what I found:
+OMNIME: "Here's what I found:
         1. Recommendation System @ Google (current) - PyTorch, started Jan 2025
         2. Fraud Detection Model @ Acme Corp (2024) - TensorFlow, 40% improvement
         3. NLP Pipeline @ University (2023) - Thesis project, BERT-based
@@ -196,7 +196,7 @@ ATLAS: "Here's what I found:
 You: /cv_for Here's a job posting for Staff ML Engineer at Meta...
      [pastes job description]
 
-ATLAS: "I've generated a CV tailored for this Staff ML Engineer role at Meta.
+OMNIME: "I've generated a CV tailored for this Staff ML Engineer role at Meta.
         I highlighted your recommendation system work at Google and the
         fraud detection project since they match the requirements.
         [📄 Download PDF] [📝 Download DOCX] [✏️ Edit]"
@@ -208,7 +208,7 @@ ATLAS: "I've generated a CV tailored for this Staff ML Engineer role at Meta.
 You: "Draft an email to Sarah about postponing tomorrow's review meeting
       to next week. Keep it casual."
 
-ATLAS: "Here's a draft:
+OMNIME: "Here's a draft:
 
         Subject: Quick reschedule - review meeting
 
@@ -226,7 +226,7 @@ ATLAS: "Here's a draft:
 ## 🗂️ Project Structure
 
 ```
-atlas/
+omnime/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
@@ -438,7 +438,7 @@ The system prompt is rebuilt for each conversation, incorporating the user's per
 ```yaml
 # prompts/system_base.yaml
 base_identity: |
-  You are ATLAS, the personal AI assistant of {user_name}.
+  You are OMNIME, the personal AI assistant of {user_name}.
   Your goal is to be their digital twin: you know their history,
   their communication style, their projects, and you act on their
   behalf when asked.
@@ -486,7 +486,7 @@ class ContextBuilder:
 
 ### 3. Memory System (`src/memory/`)
 
-**This is the heart of ATLAS.** The memory system has three layers that work together.
+**This is the heart of OMNIME.** The memory system has three layers that work together.
 
 #### 3.1 Structured Storage — PostgreSQL
 
@@ -692,7 +692,7 @@ Every piece of information is also stored as a vector embedding for natural lang
     "source": "conversation | document | manual",
     "date": "2025-01-15",
     "category": "project | skill | personal | work | education",
-    "related_entities": ["project:atlas", "skill:python"],
+    "related_entities": ["project:omnime", "skill:python"],
     "importance": 0.8  # 0-1, auto-calculated
 }
 ```
@@ -745,7 +745,7 @@ class Summarizer:
     async def update_living_profile(self, user_id: int) -> str:
         """
         Updates the 'living profile': a comprehensive document summarizing
-        EVERYTHING ATLAS knows about the user. Used as part of the system
+        EVERYTHING OMNIME knows about the user. Used as part of the system
         prompt. Recalculated periodically and after significant changes.
         """
 
@@ -818,7 +818,7 @@ class BaseSkill(ABC):
 
 ### 5. Integrations (`src/integrations/`)
 
-All integrations are optional. ATLAS works without any of them — they just add superpowers.
+All integrations are optional. OMNIME works without any of them — they just add superpowers.
 
 #### Gmail (`gmail_client.py`)
 - OAuth2 authentication (setup guide in SETUP_GUIDES.md)
@@ -842,13 +842,13 @@ All integrations are optional. ATLAS works without any of them — they just add
 
 ### 6. Self-Evolution (`src/evolution/`)
 
-ATLAS can add new capabilities to itself:
+OMNIME can add new capabilities to itself:
 
 ```
-User: "ATLAS, add the ability to track cryptocurrency prices"
+User: "OMNIME, add the ability to track cryptocurrency prices"
     │
     ▼
-1. ATLAS generates a new skill file (crypto_tracker.py)
+1. OMNIME generates a new skill file (crypto_tracker.py)
 2. Shows the code to the user for review
 3. Runs tests in an isolated sandbox
 4. If tests pass, presents a summary of changes
@@ -899,8 +899,8 @@ User: "ATLAS, add the ability to track cryptocurrency prices"
 |----------|---------|-------------|
 | `DB_HOST` | `postgres` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_NAME` | `atlas` | Database name |
-| `DB_USER` | `atlas` | Database user |
+| `DB_NAME` | `omnime` | Database name |
+| `DB_USER` | `omnime` | Database user |
 | `DB_PASSWORD` | — | **Must be set** |
 
 ### Optional Integrations
@@ -914,7 +914,7 @@ User: "ATLAS, add the ability to track cryptocurrency prices"
 | `GCAL_CLIENT_SECRET` | Google Calendar OAuth2 client secret |
 | `GCAL_REFRESH_TOKEN` | Google Calendar OAuth2 refresh token |
 | `GITHUB_TOKEN` | GitHub personal access token |
-| `GITHUB_REPO` | GitHub repo for self-evolution (e.g., `user/atlas`) |
+| `GITHUB_REPO` | GitHub repo for self-evolution (e.g., `user/omnime`) |
 
 ### General Settings
 
@@ -936,9 +936,9 @@ User: "ATLAS, add the ability to track cryptocurrency prices"
 version: '3.8'
 
 services:
-  atlas:
+  omnime:
     build: .
-    container_name: atlas-bot
+    container_name: omnime-bot
     restart: unless-stopped
     env_file: .env
     depends_on:
@@ -953,23 +953,23 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: atlas-db
+    container_name: omnime-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${DB_NAME:-atlas}
-      POSTGRES_USER: ${DB_USER:-atlas}
+      POSTGRES_DB: ${DB_NAME:-omnime}
+      POSTGRES_USER: ${DB_USER:-omnime}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-atlas}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-omnime}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   chromadb:
     image: chromadb/chroma:latest
-    container_name: atlas-vectors
+    container_name: omnime-vectors
     restart: unless-stopped
     volumes:
       - chroma_data:/chroma/chroma
@@ -1053,8 +1053,8 @@ Best for reliability and control. Suggested providers:
 ```bash
 # On your VPS:
 sudo apt update && sudo apt install docker.io docker-compose-v2 -y
-git clone https://github.com/yourusername/atlas.git
-cd atlas
+git clone https://github.com/yourusername/omnime.git
+cd omnime
 cp .env.example .env
 nano .env  # Fill in your values
 docker compose up -d
@@ -1157,7 +1157,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## 🗺️ Roadmap
 
-See the full roadmap in [GitHub Projects](https://github.com/yourusername/atlas/projects).
+See the full roadmap in [GitHub Projects](https://github.com/yourusername/omnime/projects).
 
 **Future ideas:**
 - WhatsApp channel support
@@ -1174,7 +1174,7 @@ See the full roadmap in [GitHub Projects](https://github.com/yourusername/atlas/
 
 ## ⭐ Star History
 
-If you find ATLAS useful, please consider giving it a star! It helps others discover the project.
+If you find OMNIME useful, please consider giving it a star! It helps others discover the project.
 
 ---
 

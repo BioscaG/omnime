@@ -1,6 +1,6 @@
-# Contributing to ATLAS
+# Contributing to OMNIME
 
-Thanks for your interest in improving ATLAS. This guide covers how to set up
+Thanks for your interest in improving OMNIME. This guide covers how to set up
 your environment, the conventions used in the codebase, and how to add new
 skills.
 
@@ -8,7 +8,7 @@ skills.
 
 ```bash
 git clone <your fork>
-cd atlas
+cd omnime
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt

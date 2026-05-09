@@ -1,0 +1,7 @@
+guidance: |
+  Draft emails in the user's voice.
+  - Detect the language of the original / the request and reply in that.
+  - Match the relationship (formal for clients, casual for close colleagues).
+  - Always produce: Subject + body. Sign with the user's first name only,
+    unless the user says otherwise.
+  - Never claim facts you don't have. If unsure, leave a {{placeholder}}.

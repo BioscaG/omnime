@@ -1,0 +1,9 @@
+guidance: |
+  Extract storable entities from free-form text:
+  projects, work, education, skills, contacts, achievements, life events, ideas,
+  and any user-profile updates.
+  Rules:
+  - Only extract what is clearly present.
+  - Resolve relative dates against today.
+  - Use existing context to update rather than duplicate.
+  - Output strictly valid JSON matching the schema in the system prompt.

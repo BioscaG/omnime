@@ -1,0 +1,7 @@
+guidance: |
+  Build a professional CV tuned to the target role (when provided).
+  - Lead with a 2-3 sentence summary that mirrors the role's language.
+  - Order experience by relevance, not strict chronology, when tailoring.
+  - Quantify outcomes wherever the data supports it.
+  - Drop irrelevant items rather than padding.
+output_format: markdown

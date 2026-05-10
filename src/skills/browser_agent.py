@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 from src.config import settings
 from src.integrations.browser import Browser, PAYMENT_PATTERNS
 from src.skills.base import BaseSkill, SkillResponse
+from src.skills.browser_memory import BrowserMemory, domain_of, render_priming
 
 if TYPE_CHECKING:
     from src.brain.context_builder import Context
@@ -40,8 +41,13 @@ and a list of visible interactive elements. Reply with EXACTLY ONE next action.
 Goal:
 {goal}
 
+{prior_knowledge}
+
 Steps already taken (with outcome):
 {history}
+
+Selectors that just FAILED on this site (don't repeat them):
+{blacklist}
 
 Current page:
 - URL: {url}
@@ -186,12 +192,23 @@ class BrowserAgentSkill(BaseSkill):
             yield AgentEvent(kind="error", text=f"Could not start browser: {exc}")
             return
 
+        # Per-session blacklist of selectors that just failed — fed back to
+        # the LLM each turn so it doesn't repeat the same mistake.
+        failed_selectors: list[str] = []
+
         try:
             for step_index in range(1, max_steps + 1):
                 logger.info("iter_actions: step %d — capturing state", step_index)
                 state = await browser.state(screenshots_dir)
                 logger.info("iter_actions: state url=%s title=%s", state.url, state.title)
-                step = await self._decide_next(goal, history, state, browser)
+                step = await self._decide_next(
+                    goal=goal,
+                    history=history,
+                    state=state,
+                    browser=browser,
+                    user_id=context.user_id,
+                    failed_selectors=failed_selectors,
+                )
                 logger.info(
                     "iter_actions: decided action=%s selector=%r needs_conf=%s",
                     step.action, step.selector, step.needs_confirmation,
@@ -203,6 +220,16 @@ class BrowserAgentSkill(BaseSkill):
                 history.append(step)
 
                 if step.action == "done":
+                    # Persist what worked so future sessions learn from this.
+                    try:
+                        await self._learn_from_session(
+                            user_id=context.user_id,
+                            goal=goal,
+                            history=history,
+                            final_url=state.url,
+                        )
+                    except Exception as exc:
+                        logger.warning("Could not save recipe: %s", exc)
                     yield AgentEvent(
                         kind="done",
                         text=f"✅ {step.reasoning}",
@@ -233,8 +260,11 @@ class BrowserAgentSkill(BaseSkill):
                 ok = await self._execute_step(browser, step)
                 step.succeeded = ok
                 if not ok:
-                    # Don't bail out on a single failure — let Claude see the
-                    # FAILED outcome in history and try a different tactic.
+                    # Track failed selector so we don't repeat it next turn.
+                    if step.selector:
+                        tag = f"{step.selector_type or '?'}={step.selector}"
+                        if tag not in failed_selectors:
+                            failed_selectors.append(tag)
                     logger.info(
                         "iter_actions: step %d failed, will let model retry",
                         step_index,
@@ -263,6 +293,8 @@ class BrowserAgentSkill(BaseSkill):
         history: list[AgentStep],
         state,  # PageState, but avoid circular import in annotation
         browser: Browser,
+        user_id: int | None = None,
+        failed_selectors: list[str] | None = None,
     ) -> AgentStep:
         elements_block = json.dumps(state.interactive_elements[:30], indent=0)[:2000]
         history_block = "\n".join(
@@ -277,9 +309,25 @@ class BrowserAgentSkill(BaseSkill):
             (state.url + " " + state.text_excerpt).lower(),
         ))
 
+        # Pull learnt recipes + notes for this domain.
+        prior_knowledge_block = ""
+        if user_id is not None:
+            dom = domain_of(state.url)
+            if dom:
+                recipes = BrowserMemory.find_recipes(user_id, dom, limit=2)
+                notes = BrowserMemory.get_notes(user_id, dom, limit=6)
+                prior_knowledge_block = render_priming(recipes, notes) or ""
+
+        blacklist = (
+            "\n".join(f"- {s}" for s in (failed_selectors or [])[-10:])
+            or "(none)"
+        )
+
         prompt = PLAN_PROMPT.format(
             goal=goal,
+            prior_knowledge=prior_knowledge_block or "(no prior knowledge for this site)",
             history=history_block,
+            blacklist=blacklist,
             url=state.url,
             title=state.title,
             excerpt=state.text_excerpt[:1500],
@@ -424,6 +472,71 @@ class BrowserAgentSkill(BaseSkill):
             f"🌐 Step {idx} — `{step.action}` {target}\n"
             f"_{step.reasoning[:300]}_"
         )
+
+    async def _learn_from_session(
+        self,
+        user_id: int,
+        goal: str,
+        history: list[AgentStep],
+        final_url: str,
+    ) -> None:
+        """Persist the successful step sequence + ask the LLM for site notes."""
+        # Recipe = the successful steps for the domain we ended on.
+        domain = domain_of(final_url)
+        if not domain:
+            # Fall back to the first non-blank URL in history.
+            for h in history:
+                d = domain_of(h.page_url)
+                if d:
+                    domain = d
+                    break
+        if not domain:
+            return
+
+        successful_steps: list[dict[str, Any]] = []
+        for h in history:
+            if h.succeeded is False:
+                continue
+            successful_steps.append({
+                "action": h.action,
+                "selector_type": h.selector_type,
+                "selector": h.selector,
+                "value": h.value,
+                "url": h.url,
+                "key": h.key,
+                "page_url": h.page_url,
+                "reasoning": h.reasoning[:160],
+            })
+        BrowserMemory.save_recipe(user_id, domain, goal[:200], successful_steps)
+
+        # Ask the LLM for 2-4 short observations about the site to remember.
+        try:
+            history_text = "\n".join(
+                f"{i+1}. {h.action} {h.selector_type or ''}={h.selector or h.url or ''} "
+                f"({'OK' if h.succeeded else 'FAILED' if h.succeeded is False else '?'})"
+                for i, h in enumerate(history[-12:])
+            )
+            raw = await self.llm.complete(
+                prompt=(
+                    f"You just finished a browser session on {domain}.\n"
+                    f"Goal: {goal}\nFinal URL: {final_url}\n\n"
+                    f"Steps:\n{history_text}\n\n"
+                    "Output JSON: {\"notes\": [\"<observation 1>\", ...]} — 2-4 short, "
+                    "actionable notes about THIS site that would help next time "
+                    "(quirks, working selectors, dropdowns that need typing not filling, "
+                    "anti-bot tactics, etc.). Keep each note under 120 chars."
+                ),
+                system="You produce concise site-specific learnings as strict JSON.",
+                model_tier="tiny",
+                max_tokens=400,
+                temperature=0.0,
+            )
+            data = self._parse_json(raw) or {}
+            for note in (data.get("notes") or [])[:4]:
+                if isinstance(note, str) and note.strip():
+                    BrowserMemory.add_note(user_id, domain, note.strip())
+        except Exception as exc:
+            logger.warning("Could not generate site notes: %s", exc)
 
     @staticmethod
     def _strip_command(message: str) -> str:

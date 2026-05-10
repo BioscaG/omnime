@@ -443,6 +443,31 @@ class BrowserSession(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
+class BrowserRecipe(Base):
+    __tablename__ = "browser_recipes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    goal_template: Mapped[str] = mapped_column(Text, nullable=False)
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    uses: Mapped[int] = mapped_column(Integer, default=1)
+    successes: Mapped[int] = mapped_column(Integer, default=1)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class BrowserSiteNote(Base):
+    __tablename__ = "browser_site_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(50), default="observation")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class FileRecord(Base):
     __tablename__ = "files"
 

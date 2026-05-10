@@ -30,10 +30,10 @@ class Settings(BaseSettings):
         default="anthropic", alias="LLM_PROVIDER"
     )
     llm_model_fast: str = Field(
-        default="claude-sonnet-4-20250514", alias="LLM_MODEL_FAST"
+        default="claude-sonnet-4-6", alias="LLM_MODEL_FAST"
     )
     llm_model_powerful: str = Field(
-        default="claude-opus-4-20250514", alias="LLM_MODEL_POWERFUL"
+        default="claude-opus-4-7", alias="LLM_MODEL_POWERFUL"
     )
     llm_fallback_provider: Optional[Literal["anthropic", "openai", "ollama"]] = Field(
         default=None, alias="LLM_FALLBACK_PROVIDER"

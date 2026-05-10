@@ -66,3 +66,4 @@ docker-compose.override.yml
 # Generated
 generated_skills/
 sandbox/
+.env.bak

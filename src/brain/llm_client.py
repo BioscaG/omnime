@@ -385,6 +385,17 @@ class LLMClient:
             return system
         return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
+    @staticmethod
+    def _supports_temperature(model: str) -> bool:
+        """Reasoning-style Claude models (Opus 4.7+) reject the `temperature`
+        parameter. We strip it for those and accept the model's default."""
+        m = model.lower()
+        # Known reasoning-only families that reject temperature.
+        for marker in ("opus-4-7", "opus-4.7"):
+            if marker in m:
+                return False
+        return True
+
     def _record_usage(self, model: str, usage: Any) -> None:
         inp = getattr(usage, "input_tokens", 0) or 0
         out = getattr(usage, "output_tokens", 0) or 0
@@ -420,20 +431,26 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if self._supports_temperature(model):
+            kwargs["temperature"] = temperature
         sys_blocks = self._system_blocks(system, cache_system)
         if sys_blocks is not None:
             kwargs["system"] = sys_blocks
         try:
             resp = await client.messages.create(**kwargs)
         except Exception as exc:
-            # If cache_control was rejected by the SDK/API, retry once with a
-            # plain string system to keep the bot operational.
-            if cache_system and "cache_control" in str(exc).lower() and isinstance(sys_blocks, list):
+            err = str(exc).lower()
+            # Cache_control rejected → retry with plain string system.
+            if cache_system and "cache_control" in err and isinstance(sys_blocks, list):
                 logger.warning("cache_control rejected; retrying without caching")
                 kwargs["system"] = system
+                resp = await client.messages.create(**kwargs)
+            # Temperature rejected by an unknown reasoning model → strip and retry.
+            elif "temperature" in err and "deprecated" in err and "temperature" in kwargs:
+                logger.warning("Model %s rejects temperature; retrying without it", model)
+                kwargs.pop("temperature", None)
                 resp = await client.messages.create(**kwargs)
             else:
                 raise
@@ -457,9 +474,10 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if self._supports_temperature(model):
+            kwargs["temperature"] = temperature
         sys_blocks = self._system_blocks(system, cache_system)
         if sys_blocks:
             kwargs["system"] = sys_blocks
@@ -501,10 +519,11 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "tools": tool_payload,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if self._supports_temperature(model):
+            kwargs["temperature"] = temperature
         sys_blocks = self._system_blocks(system, cache_system)
         if sys_blocks:
             kwargs["system"] = sys_blocks

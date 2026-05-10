@@ -211,6 +211,10 @@ class BrowserAgentSkill(BaseSkill):
             await browser.close()
 
     # --- Internals ------------------------------------------------------
+    # Vision-capable models: Sonnet for default routing (cheaper), Opus only
+    # if the user explicitly opts in via env. Both support image inputs.
+    DEFAULT_MODEL_TIER = "fast"
+
     async def _decide_next(
         self,
         goal: str,
@@ -242,7 +246,7 @@ class BrowserAgentSkill(BaseSkill):
             raw = await self.llm.complete(
                 prompt=prompt,
                 system="You drive a browser. Reply with strict JSON only.",
-                model_tier="powerful",
+                model_tier=self.DEFAULT_MODEL_TIER,
                 max_tokens=600,
                 temperature=0.0,
             )
@@ -264,12 +268,18 @@ class BrowserAgentSkill(BaseSkill):
         )
 
     async def _call_with_vision(self, screenshot: Path | None, prompt: str) -> str:
+        # Default to Sonnet — has vision and is ~5× cheaper than Opus.
+        model = (
+            self.llm.model_powerful
+            if self.DEFAULT_MODEL_TIER == "powerful"
+            else self.llm.model_fast
+        )
         if screenshot is None or not screenshot.exists():
             return await self.llm.complete(
                 prompt=prompt,
                 system="You drive a browser. Reply with strict JSON only.",
-                model_tier="powerful",
-                max_tokens=600,
+                model_tier=self.DEFAULT_MODEL_TIER,
+                max_tokens=800,
                 temperature=0.0,
             )
 
@@ -277,12 +287,11 @@ class BrowserAgentSkill(BaseSkill):
 
         client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         data = base64.standard_b64encode(screenshot.read_bytes()).decode()
-        resp = await client.messages.create(
-            model=self.llm.model_powerful,
-            max_tokens=800,
-            temperature=0.0,
-            system="You drive a browser. Reply with strict JSON only.",
-            messages=[{
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": 800,
+            "system": "You drive a browser. Reply with strict JSON only.",
+            "messages": [{
                 "role": "user",
                 "content": [
                     {
@@ -292,9 +301,12 @@ class BrowserAgentSkill(BaseSkill):
                     {"type": "text", "text": prompt},
                 ],
             }],
-        )
+        }
+        if self.llm._supports_temperature(model):
+            kwargs["temperature"] = 0.0
+        resp = await client.messages.create(**kwargs)
         if hasattr(resp, "usage"):
-            self.llm._record_usage(self.llm.model_powerful, resp.usage)
+            self.llm._record_usage(model, resp.usage)
         return "".join(b.text for b in resp.content if hasattr(b, "text"))
 
     async def _execute_step(self, browser: Browser, step: AgentStep) -> bool:

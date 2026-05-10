@@ -157,10 +157,52 @@ def _push_offsite(archive: Path) -> None:
             _push_scp(archive)
         elif target == "rclone":
             _push_rclone(archive)
+        elif target in ("gdrive", "drive"):
+            _push_gdrive(archive)
         else:
             logger.warning("Unknown BACKUP_REMOTE: %s", target)
     except Exception as exc:
         logger.error("Off-site backup push failed (%s): %s", target, exc)
+
+
+def _push_gdrive(archive: Path) -> None:
+    """Upload backup to a 'Backups' subfolder of the OMNIME workspace folder
+    in the user's Drive. Reuses the same OAuth token as the rest of the
+    Drive integration."""
+    from src.integrations.drive_client import DriveClient
+
+    client = DriveClient()
+    if not client.enabled:
+        logger.warning("GDRIVE_* not configured; skipping Drive backup push")
+        return
+
+    backups_folder_id = _ensure_drive_backups_folder(client)
+    try:
+        result = client.upload(
+            local_path=archive,
+            description=f"OMNIME backup created {archive.name}",
+        )
+        # Move the freshly uploaded file from the workspace root into the
+        # Backups subfolder.
+        client.move(file_id=result["id"], new_parent_id=backups_folder_id)
+        logger.info(
+            "Backup uploaded to Drive: %s (%s)",
+            archive.name, result.get("webViewLink"),
+        )
+    except Exception as exc:
+        logger.error("Drive backup upload failed: %s", exc)
+        raise
+
+
+def _ensure_drive_backups_folder(client) -> str:
+    """Return the id of the 'Backups' subfolder under OMNIME, creating it
+    on first run."""
+    existing = client.find_by_name("Backups", only_folders=True)
+    if existing:
+        return existing[0]["id"]
+    created = client.create_folder("Backups")
+    logger.info("Created OMNIME/Backups folder in Drive: %s", created.get("id"))
+    return created["id"]
 
 
 def _push_s3(archive: Path) -> None:

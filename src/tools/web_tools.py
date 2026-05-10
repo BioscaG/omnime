@@ -59,9 +59,13 @@ async def _web_fetch(args: dict, context: "Context") -> str:
 WEB_FETCH = Tool(
     name="web_fetch",
     description=(
-        "Fetch a public URL and return its title + main text. After fetching, "
-        "you can use memory_save to store relevant facts, or summarise the "
-        "content directly back to the user."
+        "Fetch a public URL and return its title + main text (up to 6000 chars). "
+        "After fetching, if the content contains facts about the user "
+        "(projects, decisions, contacts, achievements, ideas), pass the FULL "
+        "fetched text — not a summary — to memory_save so the entity "
+        "extractor catches every detail. You can split a long page into "
+        "multiple memory_save calls (per project / per section); the "
+        "extractor dedups."
     ),
     input_schema={
         "type": "object",

@@ -56,15 +56,22 @@ Visible elements (truncated):
 Respond ONLY with valid JSON:
 {{
   "reasoning": "<short, what you observe and why this action>",
-  "action": "goto" | "click" | "fill" | "press" | "scroll" | "wait" | "ask_user" | "done",
-  "selector_type": "css" | "text" | "role" | "label",   // REQUIRED for click/fill (omit otherwise)
+  "action": "goto" | "click" | "fill" | "type" | "press" | "scroll" | "wait" | "ask_user" | "done",
+  "selector_type": "css" | "text" | "role" | "label",   // REQUIRED for click/fill/type
   "selector": "<the locator value, see selector_type below>",
   "url": "<https://...>",                                // only for goto
-  "value": "<text>",                                     // only for fill
+  "value": "<text>",                                     // only for fill / type
   "key": "Enter|Tab|Escape",                             // only for press
   "needs_confirmation": true | false,
   "user_message": "<question to send the user>"           // only when action=ask_user
 }}
+
+Action notes:
+- `fill`: clears the field then sets the exact value. Best for plain text inputs.
+- `type`: focuses the field and types character-by-character (triggers autocomplete
+  dropdowns properly). Use this for fields that need autocomplete (Renfe, airline
+  origin/destination, etc.).
+- `press`: sends a keyboard key globally (e.g. Enter to submit a form).
 
 Selector types — pick ONE and put the bare value in `selector`:
 - `css`: a real CSS selector, e.g. `input[name='q']`, `#submit`, `.btn-primary`
@@ -122,7 +129,7 @@ class BrowserAgentSkill(BaseSkill):
         "fill this form", "navega por", "rellena el formulario",
     ]
 
-    MAX_STEPS = 12
+    MAX_STEPS = 20
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm
@@ -363,13 +370,29 @@ class BrowserAgentSkill(BaseSkill):
                 await browser.goto(step.url)
                 return True
             if step.action == "click" and step.selector:
-                return await _click_by_type(browser, step.selector_type, step.selector)
+                ok = await _click_by_type(browser, step.selector_type, step.selector)
+                if ok:
+                    # Let UI animations / dropdowns settle before next screenshot.
+                    await browser.wait(1.5)
+                return ok
             if step.action == "fill" and step.selector:
-                return await _fill_by_type(
+                ok = await _fill_by_type(
                     browser, step.selector_type, step.selector, step.value or ""
                 )
+                if ok:
+                    await browser.wait(1.0)
+                return ok
+            if step.action == "type" and step.selector:
+                ok = await _type_by_type(
+                    browser, step.selector_type, step.selector, step.value or ""
+                )
+                if ok:
+                    # Slow type triggers autocomplete; wait for dropdown to populate.
+                    await browser.wait(1.8)
+                return ok
             if step.action == "press" and step.key:
                 await browser.press(step.key)
+                await browser.wait(1.5)
                 return True
             if step.action == "scroll":
                 await browser.scroll()
@@ -454,6 +477,38 @@ async def _click_by_type(browser: Browser, sel_type: str | None, value: str) -> 
     except Exception as exc:
         logger.warning("click(%s=%r) failed: %s", sel_type, value, exc)
     return False
+
+
+async def _type_by_type(browser: Browser, sel_type: str | None, value: str, text: str) -> bool:
+    """Focus the locator then type characters one at a time (triggers
+    keyup/input handlers — needed for autocomplete dropdowns)."""
+    sel_type = (sel_type or "").lower() or _infer_selector_type(value)[0]
+    page = browser._page
+    if page is None:
+        return False
+    try:
+        if sel_type == "css":
+            locator = page.locator(value).first
+        elif sel_type == "label":
+            locator = page.get_by_label(value).first
+        elif sel_type == "role":
+            role, _, name = value.partition(":")
+            locator = page.get_by_role(role.strip() or "textbox", name=name.strip()).first
+        elif sel_type == "text":
+            try:
+                locator = page.get_by_placeholder(value).first
+                await locator.click(timeout=4000)
+            except Exception:
+                locator = page.get_by_label(value).first
+        else:
+            return False
+        await locator.click(timeout=6000)
+        await locator.fill("")
+        await page.keyboard.type(text, delay=60)
+        return True
+    except Exception as exc:
+        logger.warning("type(%s=%r) failed: %s", sel_type, value, exc)
+        return False
 
 
 async def _fill_by_type(browser: Browser, sel_type: str | None, value: str, text: str) -> bool:

@@ -23,10 +23,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     name = update.effective_user.first_name or "there"
     text = (
         f"👋 Hi {name}, I'm OMNIME — your personal AI assistant.\n\n"
-        "Tell me anything about yourself, your work, your ideas. I'll remember it.\n"
-        "I can also generate CVs, draft emails, write documents, research topics,\n"
-        "and give you a daily briefing.\n\n"
-        "Try /me to see what I know, /skills for my capabilities, /search to query memory."
+        "Just tell me what you need, in any language. I can read your "
+        "email, manage your calendar, search the web, generate documents, "
+        "remember things you tell me, browse the web for you, and more — "
+        "no slash commands required.\n\n"
+        "Quick views: /me /projects /inbox /files /reminders /scheduled_emails\n"
+        "Control: /reset (start fresh thread) · /model (switch tier) · /tools (usage dashboard)"
     )
     await safe_send(update.effective_message.reply_text, text)
 
@@ -137,40 +139,10 @@ async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await safe_send(update.effective_message.reply_text, "\n\n".join(lines))
 
 
-async def cmd_cv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _run_skill(update, context, "cv_generator", "/cv")
-
-
-async def cmd_cv_for(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.effective_message.text or ""
-    await _run_skill(update, context, "cv_generator", text)
-
-
-async def cmd_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.effective_message.text or "/email"
-    await _run_skill(update, context, "email_composer", text)
-
-
-async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _run_skill(update, context, "daily_briefing", "/briefing")
-
-
 async def cmd_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List + summarise unread Gmail messages."""
+    """List + summarise unread Gmail messages with rich UI buttons."""
     text = update.effective_message.text or "/inbox"
     await _run_skill(update, context, "email_inbox", text)
-
-
-async def cmd_read_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Open and summarise a specific email by reference or hint."""
-    text = update.effective_message.text or "/read"
-    await _run_skill(update, context, "email_read", text)
-
-
-async def cmd_search_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Search Gmail with natural language."""
-    text = update.effective_message.text or "/search_mail"
-    await _run_skill(update, context, "email_search", text)
 
 
 async def cmd_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -465,22 +437,6 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await safe_send(update.effective_message.reply_text, "\n".join(lines))
 
 
-async def cmd_evolve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await authorize(update, context):
-        return
-    if not context.args:
-        await safe_send(
-            update.effective_message.reply_text,
-            "Usage: /evolve <description of new capability>",
-        )
-        return
-    request = " ".join(context.args)
-    orchestrator = context.application.bot_data["orchestrator"]
-    user_id_db = context.application.bot_data["user_id_db"]
-    response = await orchestrator.process_message(user_id_db, "EVOLVE: " + request)
-    await safe_send(update.effective_message.reply_text, response.text[:4000])
-
-
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await authorize(update, context):
         return
@@ -549,109 +505,6 @@ async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     selector = " ".join(context.args)
     summary = memory.forget(user_id_db, selector)
     await safe_send(update.effective_message.reply_text, summary)
-
-
-async def cmd_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _run_skill(update, context, "weekly_review", "/review")
-
-
-async def cmd_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await authorize(update, context):
-        return
-    if not context.args:
-        await safe_send(
-            update.effective_message.reply_text,
-            "Usage: /goal <description>\nExample: /goal run 3x a week",
-        )
-        return
-    description = " ".join(context.args)
-    memory = context.application.bot_data["memory"]
-    user_id_db = context.application.bot_data["user_id_db"]
-    g = memory.add_goal(user_id_db, description)
-    await safe_send(
-        update.effective_message.reply_text,
-        f"Goal tracked: **{g['description']}** — current streak {g['streak']}",
-    )
-
-
-async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Run the agentic multi-step planner."""
-    if not await authorize(update, context):
-        return
-    if not context.args:
-        await safe_send(update.effective_message.reply_text, "Usage: /plan <goal>")
-        return
-    goal = " ".join(context.args)
-    await _run_skill(update, context, "agentic", "/plan " + goal)
-
-
-async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fetch a public URL and process it."""
-    if not await authorize(update, context):
-        return
-    if not context.args:
-        await safe_send(update.effective_message.reply_text, "Usage: /fetch <url>")
-        return
-    url = " ".join(context.args)
-    await _run_skill(update, context, "web_fetch", "/fetch " + url)
-
-
-async def cmd_browse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Drive a real browser to advance a goal, with screenshots + confirmations."""
-    logger.info("cmd_browse: entered")
-    if not await authorize(update, context):
-        return
-    if not context.args:
-        await safe_send(
-            update.effective_message.reply_text,
-            "Usage: /browse <goal>\n"
-            "Example: /browse find a Madrid-Barcelona train tomorrow at 12:00 on renfe.com",
-        )
-        return
-    goal = " ".join(context.args)
-    logger.info("cmd_browse: goal=%r", goal)
-
-    registry = context.application.bot_data["skill_registry"]
-    context_builder = context.application.bot_data["context_builder"]
-    user_id_db = context.application.bot_data["user_id_db"]
-    skill = registry.get("browser_agent")
-    if skill is None:
-        await safe_send(update.effective_message.reply_text, "Browser agent not available.")
-        return
-
-    chat = update.effective_chat
-    ctx = await context_builder.build(user_id_db, "/browse " + goal)
-    await safe_send(chat.send_message, f"🌐 Starting browser session\nGoal: {goal}")
-
-    try:
-        logger.info("cmd_browse: starting iter_actions")
-        async for event in skill.iter_actions("/browse " + goal, ctx):
-            logger.info("cmd_browse: event kind=%s text=%r", event.kind, (event.text or "")[:120])
-            if event.screenshot and event.screenshot.exists():
-                with event.screenshot.open("rb") as fh:
-                    await chat.send_photo(photo=fh, caption=event.text[:1000])
-            else:
-                await safe_send(chat.send_message, event.text or "(no text)")
-
-            if event.kind == "needs_confirmation":
-                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-                state = context.application.bot_data.setdefault("browser_pending", {})
-                state[user_id_db] = {"goal": goal, "step": event.step}
-                kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✅ Continue", callback_data="browse:continue"),
-                    InlineKeyboardButton("✏️ Edit", callback_data="browse:edit"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="browse:cancel"),
-                ]])
-                await chat.send_message(
-                    "Awaiting your decision before continuing.", reply_markup=kb,
-                )
-                return
-            if event.kind in ("done", "error"):
-                return
-    except Exception as exc:
-        logger.exception("Browser session crashed")
-        await safe_send(chat.send_message, f"Browser crash: {exc}")
 
 
 async def cmd_creds(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

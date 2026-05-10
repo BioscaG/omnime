@@ -102,18 +102,19 @@ def build_application() -> Application:
 
     middleware.install(application)
 
+    # Slash commands kept on purpose:
+    #   - rich-UI dashboards (lists with buttons, grouped views)
+    #   - control / admin (resetting state, switching tier, dumping vault)
+    #
+    # Anything else — drafting an email, generating a CV, fetching a URL,
+    # browsing, planning, evolving — goes through natural language so the
+    # agentic loop picks the right tool. No skill is lost: every former
+    # cmd_X skill is still invocable from the loop's tool catalog.
     application.add_handler(CommandHandler("start", commands.cmd_start))
     application.add_handler(CommandHandler("me", commands.cmd_me))
     application.add_handler(CommandHandler("search", commands.cmd_search))
     application.add_handler(CommandHandler("projects", commands.cmd_projects))
-    application.add_handler(CommandHandler("cv", commands.cmd_cv))
-    application.add_handler(CommandHandler("cv_for", commands.cmd_cv_for))
-    application.add_handler(CommandHandler("email", commands.cmd_email))
-    application.add_handler(CommandHandler("briefing", commands.cmd_briefing))
     application.add_handler(CommandHandler("inbox", commands.cmd_inbox))
-    application.add_handler(CommandHandler("mail", commands.cmd_inbox))
-    application.add_handler(CommandHandler("read", commands.cmd_read_email))
-    application.add_handler(CommandHandler("search_mail", commands.cmd_search_email))
     application.add_handler(CommandHandler("scheduled_emails", commands.cmd_scheduled_emails))
     application.add_handler(CommandHandler("tools", commands.cmd_tools_dashboard))
     application.add_handler(CommandHandler("reset", commands.cmd_reset))
@@ -121,21 +122,13 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("reminders", commands.cmd_reminders))
     application.add_handler(CommandHandler("files", commands.cmd_files))
     application.add_handler(CommandHandler("skills", commands.cmd_skills))
-    application.add_handler(CommandHandler("evolve", commands.cmd_evolve))
     application.add_handler(CommandHandler("settings", commands.cmd_settings))
     application.add_handler(CommandHandler("export", commands.cmd_export))
     application.add_handler(CommandHandler("backup", commands.cmd_backup))
     application.add_handler(CommandHandler("forget", commands.cmd_forget))
-    application.add_handler(CommandHandler("review", commands.cmd_review))
-    application.add_handler(CommandHandler("goal", commands.cmd_goal))
     application.add_handler(CommandHandler("private", commands.cmd_private))
     application.add_handler(CommandHandler("usage", commands.cmd_usage))
     application.add_handler(CommandHandler("voice", commands.cmd_voice_reply))
-    application.add_handler(CommandHandler("plan", commands.cmd_plan))
-    application.add_handler(CommandHandler("agent", commands.cmd_plan))
-    application.add_handler(CommandHandler("fetch", commands.cmd_fetch))
-    application.add_handler(CommandHandler("url", commands.cmd_fetch))
-    application.add_handler(CommandHandler("browse", commands.cmd_browse))
     application.add_handler(CommandHandler("creds", commands.cmd_creds))
 
     application.add_handler(CallbackQueryHandler(callbacks.handle_callback))

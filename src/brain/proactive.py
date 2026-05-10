@@ -209,9 +209,8 @@ async def proactive_scan(application, memory, llm, user_id: int) -> None:
         logger.debug("scanner: cooldown still active for %s, skipping", key)
         return
 
-    chat_id = settings.proactive_chat_id or 0
+    chat_id = settings.proactive_chat_id or settings.telegram_user_id or 0
     if not chat_id:
-        # Fall back to the configured authorized user — populated at boot.
         chat_id = (application.bot_data or {}).get("primary_chat_id") or 0
     if not chat_id:
         logger.debug("scanner: no chat_id configured; not sending")

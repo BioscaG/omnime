@@ -177,15 +177,18 @@ MEMORY_RECENT_MESSAGES = Tool(
 
 async def _memory_remind(args: dict, context: "Context") -> str:
     content = (args.get("content") or "").strip()
-    when = (args.get("when") or "").strip()
-    if not content or not when:
-        return json.dumps({"error": "content and when are required"})
+    due_at_str = (args.get("due_at") or "").strip()
+    if not content or not due_at_str:
+        return json.dumps({"error": "content and due_at are required"})
     user_id = int(getattr(context, "user_id", 0) or 0)
-    due_at = _parse_when(when)
-    if due_at is None:
-        return json.dumps({"error": f"could not parse 'when': {when!r}. Use ISO 8601 (2026-05-13T18:00) or relative ('in 3 days', 'tomorrow 9am')."})
 
     from datetime import datetime as _dt
+
+    try:
+        due_at = _dt.fromisoformat(due_at_str.replace("Z", "").replace("+00:00", ""))
+    except Exception:
+        return json.dumps({"error": f"due_at must be ISO 8601 (e.g. 2026-05-13T18:00). Got: {due_at_str!r}"})
+
     if due_at <= _dt.utcnow():
         return json.dumps({"error": "due_at is in the past"})
 
@@ -216,79 +219,30 @@ async def _memory_remind(args: dict, context: "Context") -> str:
         return json.dumps({"error": str(exc)})
 
 
-def _parse_when(value: str):
-    """Parse 'in 3 days', 'tomorrow 9am', '2026-05-13T18:00', etc.
-    Returns naive UTC datetime."""
-    from datetime import datetime as _dt, timedelta
-    import re as _re
-
-    raw = value.strip().lower()
-
-    # ISO 8601 absolute
-    try:
-        return _dt.fromisoformat(value.replace("Z", ""))
-    except Exception:
-        pass
-
-    now = _dt.utcnow()
-
-    # "in 3 days", "in 2 hours", "en 5 minutos"
-    m = _re.match(
-        r"^(?:in|en)\s+(\d+)\s+(minute|minuto|hour|hora|day|d[ií]a|week|semana|month|mes)s?",
-        raw,
-    )
-    if m:
-        n = int(m.group(1))
-        unit = m.group(2)
-        if unit.startswith(("min",)):
-            return now + timedelta(minutes=n)
-        if unit.startswith(("hour", "hora")):
-            return now + timedelta(hours=n)
-        if unit.startswith(("day", "dí", "di")):
-            return now + timedelta(days=n)
-        if unit.startswith(("week", "semana")):
-            return now + timedelta(weeks=n)
-        if unit.startswith(("month", "mes")):
-            return now + timedelta(days=30 * n)
-
-    # "tomorrow [HH:MM]" / "mañana [HH:MM]"
-    m = _re.match(r"^(tomorrow|ma[ñn]ana)(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?(?:\s*(am|pm))?)?", raw)
-    if m:
-        base = (now + timedelta(days=1)).replace(minute=0, second=0, microsecond=0)
-        if m.group(2):
-            hh = int(m.group(2))
-            mm = int(m.group(3) or 0)
-            if (m.group(4) or "").lower() == "pm" and hh < 12:
-                hh += 12
-            base = base.replace(hour=hh, minute=mm)
-        else:
-            base = base.replace(hour=9)
-        return base
-
-    return None
-
-
 MEMORY_REMIND = Tool(
     name="memory_remind",
     description=(
         "Schedule a future reminder. Use whenever the user says 'remind me "
         "about X', 'recuérdame Y mañana', or implicitly when they share an "
         "idea/decision that benefits from a follow-up nudge later. The bot "
-        "will Telegram-ping them at due_at with the content."
+        "will Telegram-ping them at due_at with the content. "
+        "IMPORTANT: convert relative phrases ('in 3 days', 'tomorrow 9am', "
+        "'mañana', 'en 5 minutos') to ISO 8601 yourself BEFORE calling — "
+        "you know today's date and the user's intent."
     ),
     input_schema={
         "type": "object",
         "properties": {
             "content": {"type": "string", "description": "What to remind the user about (in their language)."},
-            "when": {
+            "due_at": {
                 "type": "string",
-                "description": "When to fire. Accepts ISO 8601 ('2026-05-13T18:00') or relative ('in 3 days', 'tomorrow 9am', 'in 2 hours', 'mañana', 'en 5 minutos').",
+                "description": "ISO 8601 datetime when the reminder should fire (e.g. '2026-05-13T18:00:00'). Must be in the future. UTC if no timezone offset.",
             },
             "context": {"type": "string", "description": "Optional: what was being discussed when the reminder was set."},
             "linked_kind": {"type": "string", "description": "Optional: 'idea' | 'project' | 'decision' | 'contact' if this reminder follows up on a saved entity."},
             "linked_id": {"type": "integer", "description": "Optional: id of the linked entity."},
         },
-        "required": ["content", "when"],
+        "required": ["content", "due_at"],
     },
     run=_memory_remind,
 )

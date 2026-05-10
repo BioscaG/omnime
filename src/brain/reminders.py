@@ -39,10 +39,13 @@ async def fire_due_reminders(application, user_id: int) -> int:
         from src.utils.formatters import to_telegram_html
         from telegram.constants import ParseMode
 
-        chat_id = (application.bot_data or {}).get("primary_chat_id") or 0
-        if not chat_id:
-            from src.config import settings
-            chat_id = settings.proactive_chat_id or 0
+        from src.config import settings
+        chat_id = (
+            settings.proactive_chat_id
+            or settings.telegram_user_id
+            or (application.bot_data or {}).get("primary_chat_id")
+            or 0
+        )
         if not chat_id:
             logger.warning("reminders: no chat_id configured; skipping fire")
             return 0

@@ -398,73 +398,112 @@ async def _claude_code_analyze(args: dict, context: "Context") -> str:
         return json.dumps({"error": "Claude Code CLI not installed"})
 
     user_id = int(getattr(context, "user_id", 0) or 0)
+
+    # Resolve to a list of source paths. Three accepted argument shapes:
+    #   - file_record_id (int) → single file/folder
+    #   - file_record_ids (list[int]) → multiple files (e.g. all .tex of a TFG)
+    #   - filename (str) → single file by name in data/uploads/
+    src_paths: list[Path] = []
     fid = args.get("file_record_id")
+    fids = args.get("file_record_ids") or []
+    if fid is not None and not fids:
+        fids = [fid]
     filename = (args.get("filename") or "").strip()
 
-    # Resolve to a local Path. Reuses the same logic as drive_tools/chat_tools.
-    src_path: Path | None = None
-    name: str | None = None
-    if fid is not None:
+    if fids:
         from sqlalchemy import select
         from src.memory import models as m
         from src.memory.db import session_scope
 
         with session_scope() as s:
-            row = s.execute(
-                select(m.FileRecord)
-                .where(m.FileRecord.id == int(fid))
-                .where(m.FileRecord.user_id == user_id)
-            ).scalar_one_or_none()
-            if row is None:
-                return json.dumps({"error": f"file_record_id {fid} not found"})
-            name = row.filename
-            src_path = Path(settings.uploads_dir) / (name or "")
+            for one in fids:
+                row = s.execute(
+                    select(m.FileRecord)
+                    .where(m.FileRecord.id == int(one))
+                    .where(m.FileRecord.user_id == user_id)
+                ).scalar_one_or_none()
+                if row is None:
+                    return json.dumps({"error": f"file_record_id {one} not found"})
+                p = Path(settings.uploads_dir) / (row.filename or "")
+                if not p.exists():
+                    return json.dumps({"error": f"file missing on disk: {row.filename}"})
+                src_paths.append(p)
     elif filename:
-        name = filename
-        src_path = Path(settings.uploads_dir) / filename
+        p = Path(settings.uploads_dir) / filename
+        if not p.exists():
+            return json.dumps({"error": f"file not found: {filename}"})
+        src_paths.append(p)
     else:
-        return json.dumps({"error": "either file_record_id or filename is required"})
+        return json.dumps({"error": "pass file_record_id, file_record_ids (list), or filename"})
 
-    if src_path is None or not src_path.exists():
-        return json.dumps({"error": f"file not found on disk: {name}"})
+    if not src_paths:
+        return json.dumps({"error": "no files resolved"})
 
     timeout = int(args.get("timeout") or DEFAULT_TIMEOUT)
     timeout = max(60, min(MAX_TIMEOUT, timeout))
 
     workdir = Path(tempfile.mkdtemp(prefix="omnime-analyze-"))
     try:
-        # File or directory? Both supported.
-        if src_path.is_dir():
-            target = workdir / src_path.name
-            shutil.copytree(src_path, target)
+        # Three input shapes:
+        #   - 1 directory  → copytree, navigate
+        #   - 1 file       → copy, point at it
+        #   - N files      → copy all to workdir root (treat as a project)
+        copied_kind = ""
+        size_kb = 0
+        if len(src_paths) == 1 and src_paths[0].is_dir():
+            src = src_paths[0]
+            target = workdir / src.name
+            shutil.copytree(src, target)
             file_count = sum(1 for _ in target.rglob("*") if _.is_file())
             size_kb = sum(p.stat().st_size for p in target.rglob("*") if p.is_file()) // 1024
             full_prompt = (
-                f"You are analysing the directory `./{src_path.name}/` "
+                f"You are analysing the directory `./{src.name}/` "
                 f"in this workspace ({file_count} files, {size_kb} KB total). "
                 f"Navigate the tree freely (Read, Grep, Glob), then answer.\n\n"
                 f"User's question / instruction:\n\n{prompt}\n\n"
                 "Reply with the analysis. Be concrete: cite specific files / "
                 "sections / lines when relevant. Match the user's language."
             )
-            log_label = f"dir={src_path.name} files={file_count} size={size_kb}KB"
-        else:
-            target = workdir / src_path.name
-            shutil.copy(src_path, target)
+            copied_kind = "directory"
+        elif len(src_paths) == 1:
+            src = src_paths[0]
+            target = workdir / src.name
+            shutil.copy(src, target)
             size_kb = target.stat().st_size // 1024
             full_prompt = (
-                f"You are analysing the file `./{src_path.name}` in this "
+                f"You are analysing the file `./{src.name}` in this "
                 f"directory. Read it fully (it's {size_kb} KB). User's "
                 f"question / instruction:\n\n{prompt}\n\n"
                 "Reply with the analysis. Be concrete: cite specific "
                 "sections / rows / lines when relevant. Match the user's "
                 "language."
             )
-            log_label = f"file={src_path.name} size={size_kb}KB"
+            copied_kind = "file"
+        else:
+            for src in src_paths:
+                target = workdir / src.name
+                if src.is_dir():
+                    shutil.copytree(src, target)
+                else:
+                    shutil.copy(src, target)
+            file_count = sum(1 for _ in workdir.rglob("*") if _.is_file())
+            size_kb = sum(p.stat().st_size for p in workdir.rglob("*") if p.is_file()) // 1024
+            file_listing = "\n".join(f"- {p.name}" for p in src_paths)
+            full_prompt = (
+                f"You are analysing a project assembled from "
+                f"{file_count} uploaded files, {size_kb} KB total. The "
+                f"files are at the workspace root:\n\n{file_listing}\n\n"
+                f"Treat them as ONE project. Navigate freely with "
+                f"Read/Grep/Glob.\n\n"
+                f"User's question / instruction:\n\n{prompt}\n\n"
+                "Reply with the analysis. Be concrete: cite specific files / "
+                "sections / lines when relevant. Match the user's language."
+            )
+            copied_kind = "project"
 
         logger.info(
-            "claude_code_analyze: %s prompt=%s",
-            log_label, prompt[:80],
+            "claude_code_analyze: kind=%s files=%d size=%dKB prompt=%s",
+            copied_kind, len(src_paths), size_kb, prompt[:80],
         )
         ok, stdout, stderr = _run_claude(full_prompt, workdir, timeout)
         if not ok:
@@ -476,8 +515,8 @@ async def _claude_code_analyze(args: dict, context: "Context") -> str:
 
         return json.dumps({
             "status": "analyzed",
-            "filename": src_path.name,
-            "kind": "directory" if src_path.is_dir() else "file",
+            "kind": copied_kind,
+            "files": [p.name for p in src_paths],
             "size_kb": size_kb,
             "analysis": (stdout or "")[:10000],
         }, ensure_ascii=False)
@@ -488,27 +527,42 @@ async def _claude_code_analyze(args: dict, context: "Context") -> str:
 CLAUDE_CODE_ANALYZE = Tool(
     name="claude_code_analyze",
     description=(
-        "Deep-dive analysis of an uploaded file or FOLDER using Claude "
-        "Code (free under the user's Pro/Max subscription). PREFERRED "
-        "for SUBSTANTIAL content: folder/zip uploads (TFG with .tex + "
-        "figures, project dumps), big PDFs, CSVs to actually analyse, "
-        "code dumps, multi-format. Handles directories natively — pass "
-        "the folder's file_record_id and Claude Code navigates the "
-        "tree with Read/Grep/Glob.\n\n"
+        "Deep-dive analysis via Claude Code (free under the user's "
+        "Pro/Max subscription). Accepts THREE input shapes:\n"
+        "- file_record_id (single file or folder)\n"
+        "- file_record_ids (LIST — multiple files treated as one "
+        "  project; use this when the user uploaded several related "
+        "  files like a TFG's .tex chapters + .bib)\n"
+        "- filename (single file by name)\n\n"
+        "PREFERRED for SUBSTANTIAL content: folder/zip uploads, "
+        "multi-file projects (TFG with .tex + figures + bib), big "
+        "PDFs, code dumps, CSVs the user wants real analysis on. "
+        "Handles directories natively — Claude Code navigates with "
+        "Read/Grep/Glob.\n\n"
         "Use files_search / files_get only for trivial single-file "
-        "lookups ('what page mentions X'). When in doubt → default to "
-        "claude_code_analyze (subscription cost is \\$0).\n\n"
-        "Resolve via file_record_id (preferred — from files_list) or "
-        "filename. Read-only: no commit, no push, no PR."
+        "lookups. When in doubt → default to claude_code_analyze "
+        "(subscription cost = \\$0).\n\n"
+        "Read-only: no commit, no push, no PR."
     ),
     input_schema={
         "type": "object",
         "properties": {
-            "file_record_id": {"type": "integer", "description": "Preferred: id from files_list/files_search."},
-            "filename": {"type": "string", "description": "Alternative: filename inside data/uploads/."},
+            "file_record_id": {
+                "type": "integer",
+                "description": "Single file or folder id from files_list/files_search.",
+            },
+            "file_record_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "LIST of file_record_ids to treat as one project — perfect for multi-file uploads (TFG chapters + bib, code repo dump, etc.). Files copy to the workdir root.",
+            },
+            "filename": {
+                "type": "string",
+                "description": "Alternative: a single filename inside data/uploads/.",
+            },
             "prompt": {
                 "type": "string",
-                "description": "What to analyse. Be specific: 'extract all dates and amounts', 'summarise chapter by chapter', 'find inconsistencies', etc.",
+                "description": "What to analyse. Be specific: 'summarise chapter by chapter and save key facts to memory', 'find inconsistencies between chapters 3 and 4', 'extract all citations'.",
             },
             "timeout": {"type": "integer", "default": DEFAULT_TIMEOUT, "minimum": 60, "maximum": MAX_TIMEOUT},
         },

@@ -495,6 +495,54 @@ def _forwarded_origin(msg) -> Optional[str]:
     return str(name) if name else "unknown"
 
 
+# Suffixes we KNOW are text (single read_text call). Anything else falls
+# through to the binary-or-text sniffer below.
+TEXT_SUFFIXES = {
+    # Plain text / markup
+    ".txt", ".md", ".rst", ".csv", ".tsv", ".json", ".log", ".yaml", ".yml",
+    ".toml", ".ini", ".cfg", ".conf", ".env", ".properties",
+    # LaTeX / bibliography / scientific writing
+    ".tex", ".bib", ".cls", ".sty", ".bst", ".bbl",
+    # Code (most common languages)
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs",
+    ".go", ".rs", ".java", ".kt", ".scala",
+    ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp",
+    ".rb", ".php", ".pl", ".swift", ".m", ".mm",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1",
+    ".html", ".htm", ".xml", ".css", ".scss", ".sass", ".less",
+    ".sql", ".graphql", ".gql", ".proto",
+    ".vim", ".lua", ".r", ".jl",
+    ".dockerfile",
+}
+
+
+def _looks_like_text(path: Path, max_bytes: int = 4096) -> bool:
+    """Sniff the first few KB to decide if a file is text. NUL bytes or a
+    high ratio of non-printables → binary. Used as a fallback when the
+    suffix isn't on our known list."""
+    try:
+        sample = path.read_bytes()[:max_bytes]
+    except Exception:
+        return False
+    if b"\x00" in sample:
+        return False
+    if not sample:
+        return False
+    # Decode-friendly?
+    try:
+        sample.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        try:
+            sample.decode("latin-1")
+            # latin-1 always succeeds, so additionally require a high
+            # ratio of printable bytes.
+            printable = sum(1 for b in sample if 32 <= b < 127 or b in (9, 10, 13))
+            return printable / max(1, len(sample)) > 0.85
+        except Exception:
+            return False
+
+
 def _extract_text(path: Path) -> str:
     suffix = path.suffix.lower()
     try:
@@ -503,12 +551,16 @@ def _extract_text(path: Path) -> str:
 
             reader = PdfReader(str(path))
             return "\n".join(p.extract_text() or "" for p in reader.pages)
-        if suffix in (".txt", ".md", ".csv", ".json", ".log"):
-            return path.read_text(encoding="utf-8", errors="ignore")
         if suffix == ".docx":
             from docx import Document
 
             return "\n".join(p.text for p in Document(str(path)).paragraphs)
+        if suffix in TEXT_SUFFIXES:
+            return path.read_text(encoding="utf-8", errors="ignore")
+        # Fallback: sniff. Lots of code/config/data files have unusual
+        # extensions but are plain text — read them anyway.
+        if _looks_like_text(path):
+            return path.read_text(encoding="utf-8", errors="ignore")
     except Exception as exc:
         logger.warning("Text extraction failed for %s: %s", path, exc)
     return ""

@@ -294,6 +294,63 @@ async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Switch the agentic-loop driver model on the fly.
+
+    Usage:
+      /model           — show current
+      /model haiku     — Haiku 4.5  (cheapest, ~5× less than Sonnet, OK for simple)
+      /model sonnet    — Sonnet 4.6 (default, balanced)
+      /model opus      — Opus 4.7   (strongest, ~5× Sonnet's cost)
+    """
+    if not await authorize(update, context):
+        return
+    from src.brain.runtime_config import (
+        TIER_LABELS,
+        VALID_TIERS,
+        agentic_model_tier,
+        set_agentic_model_tier,
+    )
+
+    arg = " ".join(context.args or []).strip().lower()
+    aliases = {
+        "haiku": "tiny",
+        "tiny": "tiny",
+        "cheap": "tiny",
+        "sonnet": "fast",
+        "fast": "fast",
+        "balanced": "fast",
+        "default": "fast",
+        "opus": "powerful",
+        "powerful": "powerful",
+        "strong": "powerful",
+    }
+    if not arg:
+        current = agentic_model_tier()
+        lines = [
+            f"**Driver actual:** `{current}` — {TIER_LABELS[current]}\n",
+            "**Cambiar con:**",
+            "- `/model haiku` — barato, suficiente para mensajes simples",
+            "- `/model sonnet` — equilibrado, default",
+            "- `/model opus` — máxima calidad, ~5× coste",
+        ]
+        await safe_send(update.effective_message.reply_text, "\n".join(lines))
+        return
+    target = aliases.get(arg)
+    if target is None:
+        await safe_send(
+            update.effective_message.reply_text,
+            f"No reconozco `{arg}`. Usa: haiku / sonnet / opus.",
+        )
+        return
+    set_agentic_model_tier(target)
+    await safe_send(
+        update.effective_message.reply_text,
+        f"✅ Driver cambiado a `{target}` — {TIER_LABELS[target]}\n"
+        f"_Toma efecto en el próximo mensaje. Persistente entre reinicios._",
+    )
+
+
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Forget the current conversation thread (start a fresh agentic session)."""
     if not await authorize(update, context):

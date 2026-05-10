@@ -415,12 +415,16 @@ class Orchestrator:
         return await self._run_agentic_loop(user_id, message, context)
 
     AGENTIC_MAX_STEPS = 8
-    # Sonnet 4.6 — the sweet spot for an agentic personal assistant. Strong
-    # at tool use + reasoning without Opus's 5× price tag. The previous
-    # hallucination problems came from a fragmented per-turn loop, not from
-    # model capability — they're fixed by the new persistent
-    # ConversationStore where Sonnet sees its own prior tool_use blocks.
-    AGENTIC_MODEL_TIER = "fast"
+    # Default driver tier — overridable at runtime via /model. Sonnet 4.6
+    # is the sweet spot for an agentic personal assistant; users can drop
+    # to Haiku via `/model haiku` if cost is a concern, or escalate to
+    # `/model opus` for hard reasoning bursts.
+    AGENTIC_MODEL_TIER_DEFAULT = "fast"
+
+    @property
+    def AGENTIC_MODEL_TIER(self) -> str:  # noqa: N802 — keep the legacy name
+        from src.brain.runtime_config import agentic_model_tier
+        return agentic_model_tier()
 
     # Heuristic: tasks that compose 3+ verbs or span multiple domains often
     # need more than the default 5 tool calls. We bump the cap to the hard

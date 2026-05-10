@@ -117,6 +117,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("scheduled_emails", commands.cmd_scheduled_emails))
     application.add_handler(CommandHandler("tools", commands.cmd_tools_dashboard))
     application.add_handler(CommandHandler("reset", commands.cmd_reset))
+    application.add_handler(CommandHandler("model", commands.cmd_model))
     application.add_handler(CommandHandler("reminders", commands.cmd_reminders))
     application.add_handler(CommandHandler("files", commands.cmd_files))
     application.add_handler(CommandHandler("skills", commands.cmd_skills))

@@ -433,22 +433,38 @@ async def _claude_code_analyze(args: dict, context: "Context") -> str:
 
     workdir = Path(tempfile.mkdtemp(prefix="omnime-analyze-"))
     try:
-        target = workdir / src_path.name
-        shutil.copy(src_path, target)
-        size_kb = target.stat().st_size // 1024
-
-        full_prompt = (
-            f"You are analysing the file `./{src_path.name}` in this "
-            f"directory. Read it fully (it's {size_kb} KB). User's "
-            f"question / instruction:\n\n{prompt}\n\n"
-            "Reply with the analysis. Be concrete: cite specific "
-            "sections / rows / lines when relevant. Match the user's "
-            "language."
-        )
+        # File or directory? Both supported.
+        if src_path.is_dir():
+            target = workdir / src_path.name
+            shutil.copytree(src_path, target)
+            file_count = sum(1 for _ in target.rglob("*") if _.is_file())
+            size_kb = sum(p.stat().st_size for p in target.rglob("*") if p.is_file()) // 1024
+            full_prompt = (
+                f"You are analysing the directory `./{src_path.name}/` "
+                f"in this workspace ({file_count} files, {size_kb} KB total). "
+                f"Navigate the tree freely (Read, Grep, Glob), then answer.\n\n"
+                f"User's question / instruction:\n\n{prompt}\n\n"
+                "Reply with the analysis. Be concrete: cite specific files / "
+                "sections / lines when relevant. Match the user's language."
+            )
+            log_label = f"dir={src_path.name} files={file_count} size={size_kb}KB"
+        else:
+            target = workdir / src_path.name
+            shutil.copy(src_path, target)
+            size_kb = target.stat().st_size // 1024
+            full_prompt = (
+                f"You are analysing the file `./{src_path.name}` in this "
+                f"directory. Read it fully (it's {size_kb} KB). User's "
+                f"question / instruction:\n\n{prompt}\n\n"
+                "Reply with the analysis. Be concrete: cite specific "
+                "sections / rows / lines when relevant. Match the user's "
+                "language."
+            )
+            log_label = f"file={src_path.name} size={size_kb}KB"
 
         logger.info(
-            "claude_code_analyze: file=%s size=%dKB prompt=%s",
-            src_path.name, size_kb, prompt[:80],
+            "claude_code_analyze: %s prompt=%s",
+            log_label, prompt[:80],
         )
         ok, stdout, stderr = _run_claude(full_prompt, workdir, timeout)
         if not ok:
@@ -461,6 +477,7 @@ async def _claude_code_analyze(args: dict, context: "Context") -> str:
         return json.dumps({
             "status": "analyzed",
             "filename": src_path.name,
+            "kind": "directory" if src_path.is_dir() else "file",
             "size_kb": size_kb,
             "analysis": (stdout or "")[:10000],
         }, ensure_ascii=False)
@@ -471,18 +488,18 @@ async def _claude_code_analyze(args: dict, context: "Context") -> str:
 CLAUDE_CODE_ANALYZE = Tool(
     name="claude_code_analyze",
     description=(
-        "Deep-dive analysis of an uploaded file using Claude Code (free "
-        "under the user's Pro/Max subscription). PREFERRED over feeding "
-        "the file into the regular loop when:\n"
-        "- The file is large (>50KB / >30 pages PDF / >5k row CSV / "
-        "  >500 line code)\n"
-        "- The user wants thorough, multi-pass analysis\n"
-        "- The file is structured data (CSV / JSON / code) where "
-        "  Claude Code's tools (Grep, Read, Bash) help.\n\n"
-        "Resolve the file via file_record_id (preferred — from "
-        "files_list / files_search) or filename. Returns the analysis "
-        "text — no commit, no push, no PR. For SHORT files where the "
-        "answer fits in one page, the regular loop is fine and faster."
+        "Deep-dive analysis of an uploaded file or FOLDER using Claude "
+        "Code (free under the user's Pro/Max subscription). PREFERRED "
+        "for SUBSTANTIAL content: folder/zip uploads (TFG with .tex + "
+        "figures, project dumps), big PDFs, CSVs to actually analyse, "
+        "code dumps, multi-format. Handles directories natively — pass "
+        "the folder's file_record_id and Claude Code navigates the "
+        "tree with Read/Grep/Glob.\n\n"
+        "Use files_search / files_get only for trivial single-file "
+        "lookups ('what page mentions X'). When in doubt → default to "
+        "claude_code_analyze (subscription cost is \\$0).\n\n"
+        "Resolve via file_record_id (preferred — from files_list) or "
+        "filename. Read-only: no commit, no push, no PR."
     ),
     input_schema={
         "type": "object",

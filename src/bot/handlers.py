@@ -239,6 +239,68 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     path = settings.uploads_dir / (doc.file_name or f"doc_{msg.message_id}")
     await file.download_to_drive(path)
 
+    # Zip / archive uploads → extract to a subdirectory and register as a
+    # 'folder' FileRecord. The agent then sends the whole tree to
+    # claude_code_analyze when the user asks for analysis.
+    if (doc.file_name or "").lower().endswith((".zip", ".tar", ".tar.gz", ".tgz")):
+        import shutil as _shutil
+
+        folder_name = path.stem  # e.g. "tfg" from "tfg.zip"
+        folder_path = settings.uploads_dir / folder_name
+        # Make folder name unique if it exists.
+        i = 2
+        while folder_path.exists():
+            folder_path = settings.uploads_dir / f"{folder_name}_{i}"
+            i += 1
+        try:
+            _shutil.unpack_archive(str(path), extract_dir=str(folder_path))
+        except Exception as exc:
+            await safe_send(chat.send_message, f"⚠️ Couldn't unpack {doc.file_name}: {exc}")
+            return
+        # Build a tree summary for the FileRecord.
+        entries = []
+        total_files = 0
+        total_size = 0
+        for child in folder_path.rglob("*"):
+            if child.is_file():
+                total_files += 1
+                total_size += child.stat().st_size
+                if len(entries) < 100:
+                    entries.append(str(child.relative_to(folder_path)))
+        summary = (
+            f"Archive '{doc.file_name}' extracted to folder `{folder_name}/`. "
+            f"{total_files} files, {total_size // 1024} KB total. "
+            f"First entries: {', '.join(entries[:10])}"
+        )
+        with session_scope() as s:
+            from src.memory.structured import StructuredStore
+            stored = StructuredStore(s).add_file(
+                user_id=user_id_db,
+                filename=folder_name,
+                file_type="folder",
+                telegram_file_id=doc.file_id,
+                extracted_text=None,
+                summary=summary,
+                tags=["archive", "folder"],
+                extra_metadata={
+                    "category": "folder",
+                    "title": folder_name,
+                    "original_archive": doc.file_name,
+                    "file_count": total_files,
+                    "total_size_bytes": total_size,
+                    "entries_preview": entries[:50],
+                },
+            )
+            stored_id = stored.id
+        # Keep the original archive on disk too, for reference.
+        await safe_send(
+            chat.send_message,
+            f"📦 Extracted **{doc.file_name}** → folder `{folder_name}/` "
+            f"(id #{stored_id}, {total_files} files, {total_size // 1024} KB).\n\n"
+            f"Ask me anything about it — for substantial analysis I'll use Claude Code on the whole tree.",
+        )
+        return
+
     extracted = await asyncio.to_thread(_extract_text, path)
 
     if not extracted:

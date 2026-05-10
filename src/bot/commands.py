@@ -236,6 +236,23 @@ async def cmd_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await authorize(update, context):
+        return
+    llm = context.application.bot_data["llm"]
+    u = llm.usage.as_dict()
+    text = (
+        "**Token usage**\n"
+        f"calls: `{u['calls']}`\n"
+        f"input: `{u['input_tokens']}`\n"
+        f"output: `{u['output_tokens']}`\n"
+        f"cache write: `{u['cache_creation_tokens']}`\n"
+        f"cache read: `{u['cache_read_tokens']}`\n"
+        f"est. cost: `${u['cost_usd']:.4f}`"
+    )
+    await safe_send(update.effective_message.reply_text, text)
+
+
 async def cmd_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await authorize(update, context):
         return

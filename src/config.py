@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     github_token: str = Field(default="", alias="GITHUB_TOKEN")
     github_repo: str = Field(default="", alias="GITHUB_REPO")
 
+    # --- Notion ---
+    notion_token: str = Field(default="", alias="NOTION_TOKEN")
+    notion_projects_db: str = Field(default="", alias="NOTION_PROJECTS_DB")
+    notion_ideas_db: str = Field(default="", alias="NOTION_IDEAS_DB")
+    notion_contacts_db: str = Field(default="", alias="NOTION_CONTACTS_DB")
+
+    # --- Self-evolution ---
+    evolution_use_docker: bool = Field(default=True, alias="EVOLUTION_USE_DOCKER")
+
     # --- General ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     timezone: str = Field(default="UTC", alias="TIMEZONE")

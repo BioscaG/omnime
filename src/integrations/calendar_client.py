@@ -92,5 +92,25 @@ class CalendarClient:
         return service.events().insert(calendarId=self.calendar_id, body=body).execute()
 
     def has_conflict(self, start: datetime, end: datetime) -> bool:
-        events = self.list_events(start, end, max_results=5)
-        return any(e for e in events if e.get("start") and e.get("end"))
+        events = self.list_events(start, end, max_results=20)
+        return any(self._overlaps(e, start, end) for e in events)
+
+    def conflicts(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
+        events = self.list_events(start, end, max_results=20)
+        return [e for e in events if self._overlaps(e, start, end)]
+
+    @staticmethod
+    def _overlaps(event: dict[str, Any], start: datetime, end: datetime) -> bool:
+        s_raw = event.get("start")
+        e_raw = event.get("end")
+        if not s_raw or not e_raw:
+            return False
+        try:
+            s = datetime.fromisoformat(str(s_raw).replace("Z", "+00:00"))
+            e = datetime.fromisoformat(str(e_raw).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        # Strip tzinfo for naive comparison; both inputs are tz-naive in our usage.
+        s = s.replace(tzinfo=None)
+        e = e.replace(tzinfo=None)
+        return s < end and e > start

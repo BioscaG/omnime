@@ -43,6 +43,7 @@ COMMAND_DESCRIPTIONS = [
     ("evolve", "Add a new capability"),
     ("settings", "Configure OMNIME"),
     ("backup", "Create a backup"),
+    ("usage", "Show LLM token usage and estimated cost"),
 ]
 
 
@@ -108,6 +109,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("review", commands.cmd_review))
     application.add_handler(CommandHandler("goal", commands.cmd_goal))
     application.add_handler(CommandHandler("private", commands.cmd_private))
+    application.add_handler(CommandHandler("usage", commands.cmd_usage))
 
     application.add_handler(CallbackQueryHandler(callbacks.handle_callback))
     application.add_handler(MessageHandler(filters.VOICE, handlers.handle_voice))

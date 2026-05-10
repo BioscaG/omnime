@@ -166,6 +166,8 @@ class StructuredStore:
 
     # --- Contacts --------------------------------------------------------
     def upsert_contact(self, user_id: int, **data: Any) -> m.Contact:
+        from src.utils.crypto import encrypt
+
         name = data.get("name")
         existing = None
         if name:
@@ -177,6 +179,10 @@ class StructuredStore:
         data["last_interaction"] = _coerce_date(data.get("last_interaction"))
         if "relationship" in data:
             data["relationship_type"] = data.pop("relationship")
+        if data.get("email"):
+            data["email"] = encrypt(data["email"])
+        if data.get("phone"):
+            data["phone"] = encrypt(data["phone"])
         if existing:
             for k, v in data.items():
                 if v is not None and hasattr(existing, k):

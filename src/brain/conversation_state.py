@@ -44,7 +44,10 @@ class ConversationStore:
     def __init__(
         self,
         ttl_seconds: int = 6 * 3600,
-        max_messages: int = 60,
+        # ~10 user-visible turns. Each tool call adds 2 internal messages
+        # (tool_use block + tool_result block), so a single rich turn can
+        # consume 4 slots. 40 keeps recent context without blowing up.
+        max_messages: int = 40,
     ) -> None:
         self._sessions: dict[int, _Session] = {}
         self._ttl = ttl_seconds

@@ -259,7 +259,37 @@ class Orchestrator:
         # tools, save to memory, or just chat. No more pre-classifier
         # bottleneck deciding 'this is CHAT, no tools for you'.
         context.intent = Intent.TASK.value
+
+        # Background entity extraction. Runs independently of the agent
+        # loop so persistent memory always captures structured facts
+        # (projects, contacts, decisions, life events, …) — even when
+        # Sonnet doesn't call memory_save explicitly. process_and_store
+        # is idempotent and dedups against existing entities.
+        self._spawn_background_extraction(user_id, message)
+
         return await self._run_agentic_loop(user_id, message, context)
+
+    def _spawn_background_extraction(self, user_id: int, message: str) -> None:
+        """Fire-and-forget: extract entities from the user's message and
+        persist any new facts. Runs in parallel with the agentic loop so
+        it never blocks the user-facing response."""
+        if not message or len(message.strip()) < 12:
+            # Too short to plausibly contain an extractable fact.
+            return
+        try:
+            import asyncio
+
+            async def _runner() -> None:
+                try:
+                    await self.memory.process_and_store(
+                        user_id=user_id, message=message, context_hint="",
+                    )
+                except Exception as exc:
+                    logger.debug("background extraction failed: %s", exc)
+
+            asyncio.create_task(_runner())
+        except Exception as exc:
+            logger.debug("could not schedule background extraction: %s", exc)
 
     # --- Handlers ------------------------------------------------------
     async def _handle_store(self, user_id: int, message: str, context: Context) -> Response:

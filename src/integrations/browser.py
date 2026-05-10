@@ -187,29 +187,35 @@ class Browser:
 
     # --- Inspection -----------------------------------------------------
     async def state(self, screenshot_dir: Path) -> PageState:
+        """Capture page state with tight timeouts so a hung page can never
+        block the whole agent loop. Every sub-operation is wrapped in
+        ``asyncio.wait_for``: failures degrade gracefully instead of bubbling."""
         await self.start()
         screenshot_dir.mkdir(parents=True, exist_ok=True)
         path = screenshot_dir / f"step_{int(asyncio.get_event_loop().time() * 1000)}.png"
-        # Try to wait for visible content before screenshotting so the image
-        # isn't a blank white frame.
+        # If the body is empty after 4s, ship whatever screenshot we can.
         try:
             await self._page.wait_for_function(
                 "() => document.body && document.body.innerText.length > 30",
-                timeout=8000,
+                timeout=4000,
             )
         except Exception:
             pass
         try:
-            await self._page.screenshot(path=str(path), full_page=False, timeout=15000)
+            await self._page.screenshot(path=str(path), full_page=False, timeout=8000)
         except Exception as exc:
             logger.warning("screenshot failed: %s", exc)
             path = None
 
         url = self._page.url
-        title = await self._page.title()
         try:
-            body_text = await self._page.evaluate(
-                "() => document.body.innerText"
+            title = await asyncio.wait_for(self._page.title(), timeout=3.0)
+        except Exception:
+            title = ""
+        try:
+            body_text = await asyncio.wait_for(
+                self._page.evaluate("() => document.body && document.body.innerText"),
+                timeout=4.0,
             )
         except Exception:
             body_text = ""
@@ -217,27 +223,30 @@ class Browser:
 
         elements: list[dict[str, Any]] = []
         try:
-            elements = await self._page.evaluate(
-                """() => {
-                    const items = [];
-                    const sel = 'a, button, input, textarea, select, [role=\"button\"], [role=\"link\"]';
-                    document.querySelectorAll(sel).forEach((el, idx) => {
-                        if (idx > 60) return;
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width === 0 && rect.height === 0) return;
-                        items.push({
-                            tag: el.tagName.toLowerCase(),
-                            role: el.getAttribute('role') || null,
-                            type: el.getAttribute('type') || null,
-                            name: el.getAttribute('name') || null,
-                            id: el.id || null,
-                            label: el.getAttribute('aria-label') || null,
-                            placeholder: el.getAttribute('placeholder') || null,
-                            text: (el.innerText || '').slice(0, 80),
+            elements = await asyncio.wait_for(
+                self._page.evaluate(
+                    """() => {
+                        const items = [];
+                        const sel = 'a, button, input, textarea, select, [role=\"button\"], [role=\"link\"]';
+                        document.querySelectorAll(sel).forEach((el, idx) => {
+                            if (idx > 60) return;
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width === 0 && rect.height === 0) return;
+                            items.push({
+                                tag: el.tagName.toLowerCase(),
+                                role: el.getAttribute('role') || null,
+                                type: el.getAttribute('type') || null,
+                                name: el.getAttribute('name') || null,
+                                id: el.id || null,
+                                label: el.getAttribute('aria-label') || null,
+                                placeholder: el.getAttribute('placeholder') || null,
+                                text: (el.innerText || '').slice(0, 80),
+                            });
                         });
-                    });
-                    return items;
-                }"""
+                        return items;
+                    }"""
+                ),
+                timeout=5.0,
             )
         except Exception as exc:
             logger.debug("element scan failed: %s", exc)

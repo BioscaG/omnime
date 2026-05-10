@@ -12,6 +12,7 @@ streams every step (screenshot + reasoning + decision) to the user.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -219,16 +220,56 @@ class BrowserAgentSkill(BaseSkill):
         try:
             for step_index in range(1, max_steps + 1):
                 logger.info("iter_actions: step %d — capturing state", step_index)
-                state = await browser.state(screenshots_dir)
+                # Wrap each iteration in a hard ceiling. If something hangs
+                # we treat it as a failed step and let the agent continue —
+                # never let a single timeout kill the whole session.
+                try:
+                    state = await asyncio.wait_for(
+                        browser.state(screenshots_dir), timeout=20.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("iter_actions: state capture timed out")
+                    yield AgentEvent(
+                        kind="step",
+                        text=f"⚠️ Step {step_index} state capture timed out; retrying.",
+                    )
+                    await browser.wait(2.0)
+                    continue
+                except Exception as exc:
+                    logger.warning("iter_actions: state capture failed: %s", exc)
+                    yield AgentEvent(
+                        kind="step",
+                        text=f"⚠️ Step {step_index} state capture error: {exc}",
+                    )
+                    await browser.wait(2.0)
+                    continue
                 logger.info("iter_actions: state url=%s title=%s", state.url, state.title)
-                step = await self._decide_next(
-                    goal=goal,
-                    history=history,
-                    state=state,
-                    browser=browser,
-                    user_id=context.user_id,
-                    failed_selectors=failed_selectors,
-                )
+                try:
+                    step = await asyncio.wait_for(
+                        self._decide_next(
+                            goal=goal,
+                            history=history,
+                            state=state,
+                            browser=browser,
+                            user_id=context.user_id,
+                            failed_selectors=failed_selectors,
+                        ),
+                        timeout=45.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("iter_actions: LLM decision timed out")
+                    yield AgentEvent(
+                        kind="step",
+                        text=f"⚠️ Step {step_index} LLM call timed out; retrying.",
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning("iter_actions: decide_next failed: %s", exc)
+                    yield AgentEvent(
+                        kind="step",
+                        text=f"⚠️ Step {step_index} reasoning error: {exc}",
+                    )
+                    continue
                 logger.info(
                     "iter_actions: decided action=%s selector=%r needs_conf=%s",
                     step.action, step.selector, step.needs_confirmation,

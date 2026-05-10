@@ -37,74 +37,6 @@ def _short_repr(value: Any, limit: int = 200) -> str:
 # specific write tools. If the model's final text matches any of these but
 # the corresponding tool was NOT actually called this turn, we force one
 # more loop iteration that either makes the call or admits it didn't.
-_DRAFT_HEADERS_RE = re.compile(
-    r"^[\s\*_]*(?:Para|To|Recipient)[:\s\*_]*(?P<to>[^\s<>]+@[^\s<>]+)\s*\n"
-    r"[\s\*_]*(?:Asunto|Subject)[:\s\*_]*(?P<subject>[^\n]+)\n+"
-    r"(?P<body>.+)",
-    re.I | re.S | re.M,
-)
-
-
-_ACTION_CLAIMS: list[tuple[set[str], re.Pattern[str]]] = [
-    (
-        {"gmail_send"},
-        re.compile(
-            r"\b("
-            r"enviado|env[ií][oé]?|envi[ée]|mando|mand[ée]|"
-            r"sent|sending|just sent|on its way|"
-            r"programad[oa]|scheduled|"
-            r"(?:correo|email|mail|mensaje).{0,40}(?:enviad|programad|listo|sent|scheduled|on its way)|"
-            r"(?:enviad|programad|sent|scheduled).{0,30}(?:correo|email|mail|mensaje)"
-            r")\b",
-            re.I,
-        ),
-    ),
-    (
-        {"calendar_create"},
-        re.compile(
-            r"\b("
-            r"agendado|agendada|reservado|programada en (el )?calendar|"
-            r"created the event|added to (your )?calendar|booked|"
-            r"event scheduled|tienes (?:la )?reuni[oó]n agendada"
-            r")\b",
-            re.I,
-        ),
-    ),
-    (
-        {"memory_save"},
-        re.compile(
-            r"\b("
-            r"guardado en (?:tu )?(?:memoria|perfil)|saved to (?:your )?(?:memory|profile)|"
-            r"recordar[ée] (?:que|esto)|noted in your profile|"
-            r"a[ñn]adido a tu perfil"
-            r")\b",
-            re.I,
-        ),
-    ),
-    (
-        {"github_create_issue"},
-        re.compile(r"\b(issue created|created (an )?issue|abr[ií] (?:un )?issue)\b", re.I),
-    ),
-    (
-        {"notion_create_note"},
-        re.compile(r"\b(p[áa]gina creada en notion|notion page created|added to notion)\b", re.I),
-    ),
-]
-
-
-def _detect_hallucinated_action(final_text: str, called_tools: set[str]) -> str | None:
-    """Return a human-readable description of the hallucinated action, or
-    None if everything claimed in ``final_text`` is backed by a real
-    ``called_tools`` entry."""
-    if not final_text:
-        return None
-    for required, pattern in _ACTION_CLAIMS:
-        if pattern.search(final_text) and not (called_tools & required):
-            return (
-                f"You claimed an action matching {next(iter(required))} but "
-                f"didn't call any of {sorted(required)} this turn."
-            )
-    return None
 
 
 class Intent(str, Enum):
@@ -524,33 +456,30 @@ class Orchestrator:
             ),
         )
 
-        # Pull pending drafts from previous turns so 'envíalo' / 'sí' have
-        # something concrete to reference instead of the model needing to
-        # reconstruct from chat history.
-        from src.skills.email_state import peek_draft
+        # Persistent conversation history (Claude.ai / ChatGPT style):
+        # the model sees its OWN prior tool_use blocks and tool_results
+        # across turns, so we don't need to summarise or reconstruct anything.
+        # When the user types 'envíalo' two turns later, the model's previous
+        # assistant message (with the draft) is right there in history.
+        from src.brain.conversation_state import get_conversation_store
 
-        pending = peek_draft(int(user_id))
-        pending_block = ""
-        if pending and pending.get("body"):
-            pending_block = (
-                "\n\nPENDING EMAIL DRAFT (from a previous turn — if the user "
-                "is now confirming, call gmail_send with these args; if they "
-                "want changes, modify and call gmail_send):\n"
-                f"to: {pending.get('to') or '(missing — ask the user)'}\n"
-                f"subject: {pending.get('subject') or '(missing)'}\n"
-                f"body:\n{pending.get('body')[:1500]}\n"
+        store = get_conversation_store()
+        is_fresh = store.is_fresh_session(int(user_id))
+
+        # Only on a fresh session (after >6h of inactivity) do we prepend a
+        # context block — for the rest of the conversation, the message
+        # history itself is the context.
+        if is_fresh:
+            grounding = (
+                f"[Session start. Memory snapshot for grounding:]\n"
+                f"{context.to_prompt_block()[:5000]}\n\n"
+                f"{message}"
             )
+            store.append_user(int(user_id), grounding)
+        else:
+            store.append_user(int(user_id), message)
 
-        history: list[dict[str, Any]] = [
-            {
-                "role": "user",
-                "content": (
-                    f"Context (recent activity):\n{context.to_prompt_block()[:5000]}"
-                    f"{pending_block}\n\n"
-                    f"User message:\n{message}"
-                ),
-            },
-        ]
+        history = store.history(int(user_id))
         skill_outputs: list[tuple[str, Any]] = []
         final_text = ""
         last_inline_buttons: list = []
@@ -578,15 +507,17 @@ class Orchestrator:
 
             if result.text and not result.tool_calls:
                 final_text = result.text
+                store.append_assistant(int(user_id), result.raw_content)
                 break
 
             if not result.tool_calls:
                 final_text = result.text or "(no response)"
+                store.append_assistant(int(user_id), result.raw_content)
                 break
 
-            # Round-trip the assistant turn so subsequent turns can match
-            # tool_use IDs to tool_result IDs.
-            history.append({"role": "assistant", "content": result.raw_content})
+            # Persist the assistant turn (with tool_use blocks) so the next
+            # iteration AND future user messages can see what was called.
+            store.append_assistant(int(user_id), result.raw_content)
 
             tool_results: list[dict[str, Any]] = []
             for call in result.tool_calls:
@@ -646,122 +577,35 @@ class Orchestrator:
                     "content": (out or "(no result)")[:8000],
                 })
 
-            history.append({"role": "user", "content": tool_results})
+            store.append_tool_results(int(user_id), tool_results)
+            history = store.history(int(user_id))
 
         # If the loop ended without a final text turn, force one extra step
         # without tool access so the model HAS to interpret the results and
         # write a real user-facing answer (rather than dumping raw tool output).
         if not final_text and skill_outputs:
             try:
-                history.append({
-                    "role": "user",
-                    "content": (
-                        "Now write the final user-facing answer using the "
-                        "tool results above. Answer the user's actual "
-                        "question — interpret, summarise, recommend. Don't "
-                        "repeat raw tool output. Match the user's language."
-                    ),
-                })
+                store.append_user(int(user_id), (
+                    "Now write the final user-facing answer using the "
+                    "tool results above. Answer the user's actual "
+                    "question — interpret, summarise, recommend. Don't "
+                    "repeat raw tool output. Match the user's language."
+                ))
                 forced = await self.llm.agentic_step(
-                    messages=history,
+                    messages=store.history(int(user_id)),
                     tools=[],  # no tools — must produce text
                     system=system,
                     model_tier=self.AGENTIC_MODEL_TIER,
                     max_tokens=900,
                 )
                 final_text = forced.text or ""
+                if final_text:
+                    store.append_assistant(int(user_id), forced.raw_content)
             except Exception as exc:
                 logger.warning("forced final-answer step failed: %s", exc)
 
-        # ANTI-HALLUCINATION: if the model claimed an action but didn't
-        # actually call the matching write tool, force one more turn that
-        # either makes the call or corrects the lie.
-        called_tool_names = {name for name, _ in skill_outputs}
-        hallucination = _detect_hallucinated_action(final_text or "", called_tool_names)
-        if hallucination:
-            logger.warning(
-                "agentic_hallucination_detected: %s | text=%s",
-                hallucination, _short_repr(final_text, limit=200),
-            )
-            try:
-                history.append({
-                    "role": "user",
-                    "content": (
-                        f"❗ HALLUCINATION CHECK FAILED: {hallucination} "
-                        "Either CALL the correct tool right now with the full "
-                        "arguments inferred from the conversation above, OR "
-                        "rewrite your previous message to honestly say you "
-                        "did NOT perform that action and ask the user to "
-                        "confirm/clarify. Do not repeat the false claim."
-                    ),
-                })
-                corrective = await self.llm.agentic_step(
-                    messages=history,
-                    tools=tools,
-                    system=system,
-                    model_tier=self.AGENTIC_MODEL_TIER,
-                    max_tokens=1500,
-                )
-                if corrective.tool_calls:
-                    history.append({"role": "assistant", "content": corrective.raw_content})
-                    new_results: list[dict[str, Any]] = []
-                    for call in corrective.tool_calls:
-                        logger.info(
-                            "corrective_tool_call: tool=%s args=%s",
-                            call.name, _short_repr(call.input),
-                        )
-                        tool = primitives_by_name.get(call.name)
-                        if tool is None:
-                            new_results.append({
-                                "type": "tool_result", "tool_use_id": call.id,
-                                "content": f"(unknown tool: {call.name})", "is_error": True,
-                            })
-                            continue
-                        t0 = time.monotonic()
-                        try:
-                            out = await tool.run(call.input or {}, context)
-                            ok = True
-                            err: Exception | None = None
-                        except Exception as exc:
-                            out = ""
-                            ok = False
-                            err = exc
-                        record_tool_call(
-                            user_id=user_id, tool_name=tool.name,
-                            args=call.input or {}, ok=ok,
-                            latency_ms=int((time.monotonic() - t0) * 1000),
-                            result_preview=out if ok else None,
-                            error=str(err) if err else None,
-                            turn_message=message,
-                        )
-                        skill_outputs.append((tool.name, out if ok else f"Error: {err}"))
-                        new_results.append({
-                            "type": "tool_result", "tool_use_id": call.id,
-                            "content": (out if ok else f"Error: {err}")[:8000],
-                            **({"is_error": True} if not ok else {}),
-                        })
-                    history.append({"role": "user", "content": new_results})
-                    # Force a final text turn after the corrective tool call.
-                    final_step = await self.llm.agentic_step(
-                        messages=history, tools=[], system=system,
-                        model_tier=self.AGENTIC_MODEL_TIER, max_tokens=900,
-                    )
-                    final_text = final_step.text or final_text
-                else:
-                    # No tool call — model rewrote text. Use the new text.
-                    final_text = corrective.text or final_text
-            except Exception as exc:
-                logger.warning("hallucination correction failed: %s", exc)
-
         if not final_text:
             final_text = "I tried but didn't produce anything useful — try rephrasing?"
-
-        # Auto-stash any draft the model wrote in text but didn't actually
-        # send. Picks up patterns like 'Para: x@y.com / Asunto: ... / <body>'
-        # and saves to email_state so the NEXT turn (when the user says
-        # 'envíalo') has the draft as a typed object, not just chat history.
-        if "gmail_send" not in {n for n, _ in skill_outputs}:
-            self._maybe_stash_implicit_draft(int(user_id), final_text)
 
         # Side-effects raised by tools during the loop: inline buttons, files,
         # scheduled-send cancellation hooks. Surface them on the Response so
@@ -881,45 +725,6 @@ class Orchestrator:
         return Response(text=text, intent=Intent.CHAT, metadata={"private": True})
 
     # --- Helpers -------------------------------------------------------
-    @staticmethod
-    def _maybe_stash_implicit_draft(user_id: int, text: str) -> None:
-        """If the model emitted an email draft as text (Para:/Asunto:/body),
-        save it to email_state so the next turn's loop sees it as a typed
-        PENDING DRAFT and can call gmail_send with concrete args."""
-        if not text:
-            return
-        # Pull out a section that looks like a draft block; tolerate '---'
-        # bracketing and code-fence wrapping that the model often uses.
-        candidate = text
-        m_block = re.search(r"-{3,}\s*\n(.*?)\n-{3,}", text, re.S)
-        if m_block:
-            candidate = m_block.group(1)
-        m = _DRAFT_HEADERS_RE.search(candidate)
-        if not m:
-            return
-        to = m.group("to").strip()
-        subject = m.group("subject").strip()
-        body = m.group("body").strip()
-        if not to or not body:
-            return
-        try:
-            from src.skills.email_state import stash_draft
-
-            stash_draft(user_id, {
-                "to": to,
-                "subject": subject,
-                "body": body,
-                "in_reply_to": None,
-                "references": None,
-                "thread_id": None,
-            })
-            logger.info(
-                "stashed_implicit_draft: to=%s subject=%s body_len=%d",
-                to, subject, len(body),
-            )
-        except Exception as exc:
-            logger.debug("stash_implicit_draft failed: %s", exc)
-
     @staticmethod
     def _is_meaningful(extraction: Any) -> bool:
         return bool(

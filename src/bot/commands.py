@@ -134,6 +134,20 @@ async def cmd_search_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _run_skill(update, context, "email_search", text)
 
 
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Forget the current conversation thread (start a fresh agentic session)."""
+    if not await authorize(update, context):
+        return
+    user_id_db = context.application.bot_data["user_id_db"]
+    from src.brain.conversation_state import get_conversation_store
+
+    get_conversation_store().reset(user_id_db)
+    await safe_send(
+        update.effective_message.reply_text,
+        "🧹 Conversation reset. Next message starts a fresh thread.",
+    )
+
+
 async def cmd_tools_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show recent tool-call usage and any failures."""
     if not await authorize(update, context):

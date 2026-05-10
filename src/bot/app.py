@@ -110,6 +110,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("search_mail", commands.cmd_search_email))
     application.add_handler(CommandHandler("scheduled_emails", commands.cmd_scheduled_emails))
     application.add_handler(CommandHandler("tools", commands.cmd_tools_dashboard))
+    application.add_handler(CommandHandler("reset", commands.cmd_reset))
     application.add_handler(CommandHandler("skills", commands.cmd_skills))
     application.add_handler(CommandHandler("evolve", commands.cmd_evolve))
     application.add_handler(CommandHandler("settings", commands.cmd_settings))

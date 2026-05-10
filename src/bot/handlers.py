@@ -25,6 +25,8 @@ _whisper_lock = asyncio.Lock()
 
 
 async def _get_whisper_model():
+    """Lazy-load local whisper; only used when OpenAI Whisper API isn't
+    configured. Requires `pip install openai-whisper` (heavy: pulls torch)."""
     global _whisper_model
     if _whisper_model is not None:
         return _whisper_model
@@ -32,12 +34,31 @@ async def _get_whisper_model():
         if _whisper_model is None:
             def _load():
                 import whisper
+
                 return whisper.load_model("base")
             _whisper_model = await asyncio.to_thread(_load)
     return _whisper_model
 
 
 async def _transcribe(path: Path) -> str:
+    """Prefer OpenAI Whisper API when OPENAI_API_KEY is set (fast, accurate,
+    cheap at ~\$0.006/min). Falls back to local whisper if the package is
+    installed."""
+    if settings.openai_api_key:
+        try:
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            with path.open("rb") as fh:
+                resp = await client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=fh,
+                )
+            return (resp.text or "").strip()
+        except Exception as exc:
+            logger.warning("OpenAI transcription failed: %s — trying local whisper", exc)
+
+    # Fallback: local whisper. Will raise ImportError if not installed.
     model = await _get_whisper_model()
     result = await asyncio.to_thread(model.transcribe, str(path))
     return (result.get("text") or "").strip()

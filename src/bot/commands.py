@@ -173,6 +173,82 @@ async def cmd_search_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _run_skill(update, context, "email_search", text)
 
 
+async def cmd_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List uploaded files, optionally filtered by category or query."""
+    if not await authorize(update, context):
+        return
+    user_id_db = context.application.bot_data["user_id_db"]
+    query = " ".join(context.args or []).strip()
+
+    from sqlalchemy import select
+    from src.memory import models as mm
+    from src.memory.db import session_scope
+    from src.utils.formatters import to_telegram_html
+    from telegram.constants import ParseMode
+
+    with session_scope() as s:
+        rows = s.execute(
+            select(mm.FileRecord)
+            .where(mm.FileRecord.user_id == user_id_db)
+            .order_by(mm.FileRecord.created_at.desc())
+            .limit(50)
+        ).scalars().all()
+        items = [
+            {
+                "id": r.id,
+                "filename": r.filename,
+                "category": (r.extra_metadata or {}).get("category") or "other",
+                "title": (r.extra_metadata or {}).get("title"),
+                "summary": (r.summary or "")[:160],
+                "tags": r.tags or [],
+                "uploaded": r.created_at.strftime("%d %b") if r.created_at else "?",
+            }
+            for r in rows
+        ]
+
+    # Category filter or substring search.
+    if query:
+        ql = query.lower()
+        items = [
+            it for it in items
+            if ql in it["category"].lower()
+            or ql in (it["filename"] or "").lower()
+            or ql in (it["title"] or "").lower()
+            or ql in (it["summary"] or "").lower()
+            or any(ql in t.lower() for t in it["tags"])
+        ]
+
+    if not items:
+        await safe_send(update.effective_message.reply_text, "No hay archivos guardados que coincidan.")
+        return
+
+    # Group by category.
+    by_cat: dict[str, list] = {}
+    for it in items:
+        by_cat.setdefault(it["category"], []).append(it)
+
+    icon = {
+        "contract": "📑", "invoice": "🧾", "receipt": "🧾", "cv": "🪪",
+        "paper": "📄", "image": "🖼", "screenshot": "📸",
+        "whiteboard": "🧑‍🏫", "note": "📝", "other": "📂",
+    }
+
+    lines = [f"**📂 {len(items)} archivos** ({len(by_cat)} categoría(s))"]
+    for cat, group in by_cat.items():
+        lines.append(f"\n{icon.get(cat, '📂')} **{cat}** — {len(group)}")
+        for it in group[:8]:
+            title = it["title"] or it["filename"] or f"#{it['id']}"
+            lines.append(f"  · _{it['uploaded']}_ — **{title}** _#{it['id']}_")
+            if it["summary"]:
+                lines.append(f"     {it['summary'][:140]}")
+
+    lines.append("\n_Tip: '/files <categoría>' para filtrar; el agente puede buscar contenido con files_search._")
+    await update.effective_message.reply_text(
+        to_telegram_html("\n".join(lines)),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List pending reminders with cancel buttons."""
     if not await authorize(update, context):

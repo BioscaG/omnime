@@ -307,7 +307,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     description = ""
     try:
         llm = context.application.bot_data["llm"]
-        description = await llm.describe_image(path, prompt=msg.caption or "Describe this image briefly.")
+        # Richer prompt: not just describe, but transcribe any visible text
+        # AND surface key facts the user might want to act on.
+        prompt = (
+            (msg.caption + "\n\n") if msg.caption else ""
+        ) + (
+            "Describe this image. If there's text in it (screenshot, "
+            "whiteboard, handwritten note, sign, receipt), TRANSCRIBE it "
+            "verbatim. Then list any key facts worth remembering "
+            "(dates, names, amounts, action items) as bullets. Match "
+            "the user's language."
+        )
+        description = await llm.describe_image(path, prompt=prompt)
     except Exception as exc:
         logger.warning("Image description failed: %s", exc)
 
@@ -317,6 +328,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     from src.memory.db import session_scope
     from src.memory.structured import StructuredStore
 
+    # Crude category detection from the description.
+    desc_lower = (description or "").lower()
+    category = "image"
+    if any(k in desc_lower for k in ("receipt", "factura", "ticket", "amount", "total")):
+        category = "receipt"
+    elif any(k in desc_lower for k in ("screenshot", "captura de pantalla", "app interface")):
+        category = "screenshot"
+    elif any(k in desc_lower for k in ("whiteboard", "pizarra", "blackboard")):
+        category = "whiteboard"
+    elif any(k in desc_lower for k in ("handwritten", "manuscrito", "note")):
+        category = "note"
+
     with session_scope() as s:
         StructuredStore(s).add_file(
             user_id=user_id_db,
@@ -325,6 +348,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             telegram_file_id=photo.file_id,
             extracted_text=description[:50000] if description else None,
             summary=description[:500] if description else None,
+            extra_metadata={"category": category},
         )
 
     if description:
@@ -332,13 +356,27 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             memory.semantic.add(
                 collection="documents",
                 text=description,
-                metadata={"user_id": user_id_db, "filename": path.name, "category": "image"},
+                metadata={"user_id": user_id_db, "filename": path.name, "category": category},
             )
         except Exception:
             pass
 
+        # If the photo carries content that might be about the user (notes,
+        # screenshots of plans, whiteboard ideas), run the entity extractor
+        # too — this is what makes "snap a whiteboard, get it organised"
+        # actually work.
+        if category in ("note", "whiteboard", "screenshot") or len(description) > 200:
+            try:
+                await memory.process_and_store(
+                    user_id=user_id_db,
+                    message=description[:8000],
+                    context_hint=f"This text was extracted from an uploaded {category}.",
+                )
+            except Exception as exc:
+                logger.debug("photo entity extraction failed: %s", exc)
+
     body = description or "(no description generated)"
-    await safe_send(chat.send_message, f"🖼 Saved photo.\n\n{body[:1500]}")
+    await safe_send(chat.send_message, f"🖼 Saved {category}.\n\n{body[:1500]}")
 
 
 def _forwarded_origin(msg) -> Optional[str]:

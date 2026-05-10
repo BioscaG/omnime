@@ -37,6 +37,14 @@ def _short_repr(value: Any, limit: int = 200) -> str:
 # specific write tools. If the model's final text matches any of these but
 # the corresponding tool was NOT actually called this turn, we force one
 # more loop iteration that either makes the call or admits it didn't.
+_DRAFT_HEADERS_RE = re.compile(
+    r"^[\s\*_]*(?:Para|To|Recipient)[:\s\*_]*(?P<to>[^\s<>]+@[^\s<>]+)\s*\n"
+    r"[\s\*_]*(?:Asunto|Subject)[:\s\*_]*(?P<subject>[^\n]+)\n+"
+    r"(?P<body>.+)",
+    re.I | re.S | re.M,
+)
+
+
 _ACTION_CLAIMS: list[tuple[set[str], re.Pattern[str]]] = [
     (
         {"gmail_send"},
@@ -415,7 +423,11 @@ class Orchestrator:
         return await self._run_agentic_loop(user_id, message, context)
 
     AGENTIC_MAX_STEPS = 8
-    AGENTIC_MODEL_TIER = "fast"  # Sonnet 4.6 — strong reasoning without Opus cost
+    # Opus 4.7 as the driver. Far better instruction-following than Sonnet —
+    # the difference shows up exactly in cases where the agent could either
+    # call a tool or fake the result in text. Costs ~5× per loop but the
+    # difference for a personal assistant is night and day.
+    AGENTIC_MODEL_TIER = "powerful"
 
     # Heuristic: tasks that compose 3+ verbs or span multiple domains often
     # need more than the default 5 tool calls. We bump the cap to the hard
@@ -512,11 +524,29 @@ class Orchestrator:
             ),
         )
 
+        # Pull pending drafts from previous turns so 'envíalo' / 'sí' have
+        # something concrete to reference instead of the model needing to
+        # reconstruct from chat history.
+        from src.skills.email_state import peek_draft
+
+        pending = peek_draft(int(user_id))
+        pending_block = ""
+        if pending and pending.get("body"):
+            pending_block = (
+                "\n\nPENDING EMAIL DRAFT (from a previous turn — if the user "
+                "is now confirming, call gmail_send with these args; if they "
+                "want changes, modify and call gmail_send):\n"
+                f"to: {pending.get('to') or '(missing — ask the user)'}\n"
+                f"subject: {pending.get('subject') or '(missing)'}\n"
+                f"body:\n{pending.get('body')[:1500]}\n"
+            )
+
         history: list[dict[str, Any]] = [
             {
                 "role": "user",
                 "content": (
-                    f"Context (recent activity):\n{context.to_prompt_block()[:1500]}\n\n"
+                    f"Context (recent activity):\n{context.to_prompt_block()[:5000]}"
+                    f"{pending_block}\n\n"
                     f"User message:\n{message}"
                 ),
             },
@@ -726,6 +756,13 @@ class Orchestrator:
         if not final_text:
             final_text = "I tried but didn't produce anything useful — try rephrasing?"
 
+        # Auto-stash any draft the model wrote in text but didn't actually
+        # send. Picks up patterns like 'Para: x@y.com / Asunto: ... / <body>'
+        # and saves to email_state so the NEXT turn (when the user says
+        # 'envíalo') has the draft as a typed object, not just chat history.
+        if "gmail_send" not in {n for n, _ in skill_outputs}:
+            self._maybe_stash_implicit_draft(int(user_id), final_text)
+
         # Side-effects raised by tools during the loop: inline buttons, files,
         # scheduled-send cancellation hooks. Surface them on the Response so
         # the bot UI can render them.
@@ -844,6 +881,45 @@ class Orchestrator:
         return Response(text=text, intent=Intent.CHAT, metadata={"private": True})
 
     # --- Helpers -------------------------------------------------------
+    @staticmethod
+    def _maybe_stash_implicit_draft(user_id: int, text: str) -> None:
+        """If the model emitted an email draft as text (Para:/Asunto:/body),
+        save it to email_state so the next turn's loop sees it as a typed
+        PENDING DRAFT and can call gmail_send with concrete args."""
+        if not text:
+            return
+        # Pull out a section that looks like a draft block; tolerate '---'
+        # bracketing and code-fence wrapping that the model often uses.
+        candidate = text
+        m_block = re.search(r"-{3,}\s*\n(.*?)\n-{3,}", text, re.S)
+        if m_block:
+            candidate = m_block.group(1)
+        m = _DRAFT_HEADERS_RE.search(candidate)
+        if not m:
+            return
+        to = m.group("to").strip()
+        subject = m.group("subject").strip()
+        body = m.group("body").strip()
+        if not to or not body:
+            return
+        try:
+            from src.skills.email_state import stash_draft
+
+            stash_draft(user_id, {
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "in_reply_to": None,
+                "references": None,
+                "thread_id": None,
+            })
+            logger.info(
+                "stashed_implicit_draft: to=%s subject=%s body_len=%d",
+                to, subject, len(body),
+            )
+        except Exception as exc:
+            logger.debug("stash_implicit_draft failed: %s", exc)
+
     @staticmethod
     def _is_meaningful(extraction: Any) -> bool:
         return bool(

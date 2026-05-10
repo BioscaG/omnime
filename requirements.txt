@@ -14,9 +14,9 @@ anthropic==0.40.0
 openai==1.57.0
 httpx==0.28.1
 
-# Vector store
+# Vector store. ChromaDB ships with its own default embedding model
+# (all-MiniLM-L6-v2) so sentence-transformers is intentionally NOT pinned here.
 chromadb==0.5.23
-sentence-transformers==3.3.1
 
 # Document generation
 python-docx==1.1.2
@@ -37,9 +37,6 @@ PyGithub==2.5.0
 beautifulsoup4==4.12.3
 duckduckgo-search==6.4.1
 
-# Voice transcription (optional)
-openai-whisper==20240930
-
 # OCR / file processing
 pypdf==5.1.0
 Pillow==11.0.0
@@ -51,7 +48,7 @@ cryptography==44.0.0
 APScheduler==3.10.4
 structlog==24.4.0
 
-# Testing
+# Testing (kept in base for CI; remove with --no-deps if you want a slim image)
 pytest==8.3.4
 pytest-asyncio==0.25.0
 pytest-cov==6.0.0

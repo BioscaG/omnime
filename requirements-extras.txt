@@ -1,0 +1,11 @@
+# Heavy optional dependencies. Install only when you need:
+#   - voice transcription (openai-whisper drags PyTorch ~3 GB)
+#   - higher-quality custom embeddings via sentence-transformers
+#
+# To install everything inside the container:
+#   pip install -r requirements-extras.txt
+#
+# Or rebuild the image with `--build-arg WITH_EXTRAS=1` (see Dockerfile).
+
+openai-whisper==20240930
+sentence-transformers==3.3.1

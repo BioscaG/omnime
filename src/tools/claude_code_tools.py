@@ -66,16 +66,10 @@ def _authed_clone_url(full_name: str) -> str | None:
     return f"https://x-access-token:{settings.github_token}@github.com/{full_name}.git"
 
 
-def _run_claude(prompt: str, cwd: Path, timeout: int) -> tuple[bool, str, str]:
-    """Run Claude Code non-interactively in cwd. Returns (ok, stdout, stderr)."""
+def _run_claude_blocking(prompt: str, cwd: Path, timeout: int) -> tuple[bool, str, str]:
+    """Synchronous Claude Code invocation. Wrap with asyncio.to_thread."""
     env = os.environ.copy()
-    # If ANTHROPIC_API_KEY is set, Claude Code will use it. If not, it falls
-    # back to the mounted ~/.claude credentials (Pro/Max subscription).
-    cmd = [
-        "claude",
-        "-p", prompt,
-        "--dangerously-skip-permissions",
-    ]
+    cmd = ["claude", "-p", prompt, "--dangerously-skip-permissions"]
     try:
         proc = subprocess.run(
             cmd,
@@ -90,6 +84,14 @@ def _run_claude(prompt: str, cwd: Path, timeout: int) -> tuple[bool, str, str]:
         return False, "", f"Claude Code timed out after {timeout}s"
     except Exception as exc:
         return False, "", f"Claude Code failed: {exc}"
+
+
+async def _run_claude(prompt: str, cwd: Path, timeout: int) -> tuple[bool, str, str]:
+    """Async wrapper — runs the blocking subprocess in a thread so the
+    event loop stays responsive while Claude Code chews on the prompt."""
+    import asyncio as _asyncio
+
+    return await _asyncio.to_thread(_run_claude_blocking, prompt, cwd, timeout)
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
@@ -148,7 +150,7 @@ async def _claude_code(args: dict, context: "Context") -> str:
             "claude_code: repo=%s base=%s via_pr=%s prompt=%s",
             full_name, base_branch, via_pr, prompt[:80],
         )
-        ok, stdout, stderr = _run_claude(prompt, workdir, timeout)
+        ok, stdout, stderr = await _run_claude(prompt, workdir, timeout)
         log_excerpt = (stdout or stderr or "")[:3000]
         if not ok:
             return json.dumps({
@@ -326,7 +328,7 @@ async def _claude_code_new_project(args: dict, context: "Context") -> str:
             "Create whatever files make sense (README, source, tests, "
             ".gitignore, dependency manifest). Be opinionated and complete."
         )
-        ok, stdout, stderr = _run_claude(scaffold_prompt, workdir, timeout)
+        ok, stdout, stderr = await _run_claude(scaffold_prompt, workdir, timeout)
         if not ok:
             return json.dumps({
                 "status": "scaffold_failed",
@@ -505,7 +507,29 @@ async def _claude_code_analyze(args: dict, context: "Context") -> str:
             "claude_code_analyze: kind=%s files=%d size=%dKB prompt=%s",
             copied_kind, len(src_paths), size_kb, prompt[:80],
         )
-        ok, stdout, stderr = _run_claude(full_prompt, workdir, timeout)
+        # Surface a heads-up to the user — Claude Code can take 1-3 min
+        # on a substantial project. Without this they think the bot died.
+        try:
+            from src.bot.runtime import get_application
+            from src.config import settings as _settings
+            app = get_application()
+            chat_id = _settings.telegram_user_id
+            if app is not None and chat_id:
+                kind_label = (
+                    f"{len(src_paths)}-file project"
+                    if copied_kind == "project"
+                    else copied_kind
+                )
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"🔬 Analysing {kind_label} with Claude Code "
+                        f"({size_kb} KB)... this can take 1-3 minutes."
+                    ),
+                )
+        except Exception as exc:
+            logger.debug("progress ping failed: %s", exc)
+        ok, stdout, stderr = await _run_claude(full_prompt, workdir, timeout)
         if not ok:
             return json.dumps({
                 "status": "claude_failed",

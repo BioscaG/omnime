@@ -34,6 +34,10 @@ COMMAND_DESCRIPTIONS = [
     ("cv_for", "Generate CV tailored to a job posting"),
     ("email", "Compose an email"),
     ("briefing", "Get your daily briefing"),
+    ("review", "Run your weekly review"),
+    ("goal", "Track a new goal with a streak"),
+    ("forget", "Delete a memory entry with audit"),
+    ("private", "Send a one-off message via local Ollama"),
     ("export", "Export your data"),
     ("skills", "List OMNIME capabilities"),
     ("evolve", "Add a new capability"),
@@ -100,10 +104,15 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("settings", commands.cmd_settings))
     application.add_handler(CommandHandler("export", commands.cmd_export))
     application.add_handler(CommandHandler("backup", commands.cmd_backup))
+    application.add_handler(CommandHandler("forget", commands.cmd_forget))
+    application.add_handler(CommandHandler("review", commands.cmd_review))
+    application.add_handler(CommandHandler("goal", commands.cmd_goal))
+    application.add_handler(CommandHandler("private", commands.cmd_private))
 
     application.add_handler(CallbackQueryHandler(callbacks.handle_callback))
     application.add_handler(MessageHandler(filters.VOICE, handlers.handle_voice))
     application.add_handler(MessageHandler(filters.Document.ALL, handlers.handle_document))
+    application.add_handler(MessageHandler(filters.PHOTO, handlers.handle_photo))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_text)
     )
@@ -144,8 +153,48 @@ def _schedule_jobs(application: Application, memory: MemoryManager, llm: LLMClie
         except Exception as exc:
             logger.warning("Living profile refresh failed: %s", exc)
 
+    async def memory_maintenance_job(context):
+        try:
+            stats = memory.run_maintenance(user_id_db)
+            logger.info("Memory maintenance: %s", stats)
+        except Exception as exc:
+            logger.warning("Memory maintenance failed: %s", exc)
+
+    async def weekly_review_job(context):
+        try:
+            from src.brain.context_builder import ContextBuilder
+
+            ctx = await ContextBuilder(memory).build(user_id_db, "/review")
+            skill = application.bot_data["skill_registry"].get("weekly_review")
+            if skill is None:
+                return
+            sr = await skill.execute("/review", ctx)
+            await context.bot.send_message(chat_id=settings.telegram_user_id, text=sr.text[:4000])
+        except Exception as exc:
+            logger.warning("Weekly review job failed: %s", exc)
+
+    async def notion_sync_job(context):
+        try:
+            from src.integrations.notion_client import NotionClient
+
+            client = NotionClient()
+            if not client.enabled:
+                return
+            from src.integrations.notion_sync import NotionSync
+
+            stats = await NotionSync(memory, client).push_all(user_id_db)
+            logger.info("Notion sync: %s", stats)
+        except Exception as exc:
+            logger.warning("Notion sync failed: %s", exc)
+
     job_queue.run_daily(briefing_job, time=dtime(hour=hh, minute=mm))
     job_queue.run_repeating(profile_refresh_job, interval=60 * 60 * 24, first=60 * 60)
+    job_queue.run_repeating(memory_maintenance_job, interval=60 * 60 * 24, first=60 * 60 * 2)
+    # Sunday 19:00 local time review
+    from datetime import time as dtime_
+
+    job_queue.run_daily(weekly_review_job, time=dtime_(hour=19, minute=0), days=(6,))
+    job_queue.run_repeating(notion_sync_job, interval=60 * 60 * 6, first=60 * 30)
 
 
 def run() -> None:

@@ -95,6 +95,7 @@ def _register_default_skills(registry: SkillRegistry) -> None:
     from src.skills.web_researcher import WebResearcherSkill
     from src.skills.daily_briefing import DailyBriefingSkill
     from src.skills.code_generator import CodeGeneratorSkill
+    from src.skills.weekly_review import WeeklyReviewSkill
 
     for cls in (
         CVGeneratorSkill,
@@ -103,6 +104,7 @@ def _register_default_skills(registry: SkillRegistry) -> None:
         WebResearcherSkill,
         DailyBriefingSkill,
         CodeGeneratorSkill,
+        WeeklyReviewSkill,
     ):
         try:
             registry.register(cls(registry.llm, registry.memory))

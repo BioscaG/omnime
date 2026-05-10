@@ -153,11 +153,11 @@ class Orchestrator:
         user_id: int,
         message: str,
         private: bool = False,
+        stream_message: Any = None,
     ) -> Response:
         context = await self.context_builder.build(user_id, message)
         if private:
-            # Force the LLM to local Ollama and tag the conversation.
-            return await self._handle_private(user_id, message, context)
+            return await self._handle_private(user_id, message, context, stream_message=stream_message)
 
         intent, route_meta = await self.classify_intent(message, context)
         context.intent = intent.value
@@ -165,12 +165,12 @@ class Orchestrator:
         if intent == Intent.STORE:
             return await self._handle_store(user_id, message, context)
         if intent == Intent.QUERY:
-            return await self._handle_query(user_id, message, context)
+            return await self._handle_query(user_id, message, context, stream_message=stream_message)
         if intent == Intent.TASK:
             return await self._handle_task(user_id, message, context, hint=route_meta.get("input", {}))
         if intent == Intent.EVOLVE:
             return await self._handle_evolve(user_id, message, context)
-        return await self._handle_chat(user_id, message, context)
+        return await self._handle_chat(user_id, message, context, stream_message=stream_message)
 
     # --- Handlers ------------------------------------------------------
     async def _handle_store(self, user_id: int, message: str, context: Context) -> Response:
@@ -196,7 +196,13 @@ class Orchestrator:
         text = "Saved:\n" + bullets + "\n\nLet me know if anything's off."
         return Response(text=text, intent=Intent.STORE, metadata={"summary": result.stored_summary})
 
-    async def _handle_query(self, user_id: int, message: str, context: Context) -> Response:
+    async def _handle_query(
+        self,
+        user_id: int,
+        message: str,
+        context: Context,
+        stream_message: Any = None,
+    ) -> Response:
         system = build_system_prompt(
             user_name=context.profile.get("name"),
             living_profile=context.living_profile,
@@ -207,8 +213,8 @@ class Orchestrator:
             f"Context to ground the answer:\n{context.to_prompt_block()}\n\n"
             "Answer using only the facts above. If unknown, say so. Be concise."
         )
-        text = await self.llm.complete(
-            prompt=body, system=system, model_tier="fast", max_tokens=800,
+        text = await self._stream_or_complete(
+            stream_message, body, system, max_tokens=800,
         )
         return Response(text=text, intent=Intent.QUERY)
 
@@ -246,17 +252,57 @@ class Orchestrator:
             )
         return await self.evolution_engine.handle(user_id=user_id, message=message, context=context)
 
-    async def _handle_chat(self, user_id: int, message: str, context: Context) -> Response:
+    async def _handle_chat(
+        self,
+        user_id: int,
+        message: str,
+        context: Context,
+        stream_message: Any = None,
+    ) -> Response:
         system = build_system_prompt(
             user_name=context.profile.get("name"),
             living_profile=context.living_profile,
             communication_style=context.profile.get("communication_style"),
         )
         body = f"{context.to_prompt_block()}\n\nUser: {message}\n\nReply naturally."
-        text = await self.llm.complete(prompt=body, system=system, model_tier="fast", max_tokens=600)
+        text = await self._stream_or_complete(
+            stream_message, body, system, max_tokens=600,
+        )
         return Response(text=text, intent=Intent.CHAT)
 
-    async def _handle_private(self, user_id: int, message: str, context: Context) -> Response:
+    async def _stream_or_complete(
+        self,
+        stream_message: Any,
+        prompt: str,
+        system: str,
+        max_tokens: int,
+    ) -> str:
+        if stream_message is None or self.llm.provider != "anthropic":
+            return await self.llm.complete(
+                prompt=prompt, system=system, model_tier="fast", max_tokens=max_tokens,
+            )
+        from src.bot.streaming import TelegramStreamer
+
+        streamer = TelegramStreamer(stream_message)
+        try:
+            async for chunk in self.llm.stream(
+                prompt=prompt, system=system, model_tier="fast", max_tokens=max_tokens,
+            ):
+                await streamer.push(chunk)
+            return await streamer.finalize()
+        except Exception as exc:
+            logger.warning("Streaming failed (%s); falling back to non-streamed", exc)
+            return await self.llm.complete(
+                prompt=prompt, system=system, model_tier="fast", max_tokens=max_tokens,
+            )
+
+    async def _handle_private(
+        self,
+        user_id: int,
+        message: str,
+        context: Context,
+        stream_message: Any = None,
+    ) -> Response:
         system = build_system_prompt(
             user_name=context.profile.get("name"),
             living_profile=context.living_profile,

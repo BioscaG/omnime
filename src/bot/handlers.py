@@ -55,6 +55,10 @@ async def _send_response(update: Update, response) -> None:
         for piece in chunk(text, size=3500):
             await safe_send(chat.send_message, piece)
 
+    await _send_extras(chat, response)
+
+
+async def _send_extras(chat, response) -> None:
     if response.inline_buttons:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -100,9 +104,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         telegram_message_id=msg.message_id,
     )
 
-    response = await orchestrator.process_message(user_id=user_id_db, message=incoming)
+    # Send a placeholder so we can stream into it for chat/query intents.
+    placeholder = await chat.send_message("…")
 
-    await _send_response(update, response)
+    response = await orchestrator.process_message(
+        user_id=user_id_db, message=incoming, stream_message=placeholder,
+    )
+
+    # If the orchestrator never streamed (STORE / TASK / EVOLVE), the
+    # placeholder is still empty — replace it; otherwise leave the streamed text.
+    if response.intent and response.intent.value not in ("CHAT", "QUERY"):
+        try:
+            await placeholder.delete()
+        except Exception:
+            pass
+        await _send_response(update, response)
+    else:
+        # Send any inline buttons / files the streamed response carried.
+        if response.inline_buttons or response.files:
+            await _send_extras(chat, response)
 
     memory.log_message(
         user_id=user_id_db,

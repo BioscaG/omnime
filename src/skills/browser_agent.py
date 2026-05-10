@@ -67,11 +67,15 @@ Respond ONLY with valid JSON:
 }}
 
 Action notes:
+- If the URL is `about:blank`, you are at the very start. Your first action
+  MUST be a `goto` to the most appropriate target site for the goal.
 - `fill`: clears the field then sets the exact value. Best for plain text inputs.
 - `type`: focuses the field and types character-by-character (triggers autocomplete
   dropdowns properly). Use this for fields that need autocomplete (Renfe, airline
   origin/destination, etc.).
 - `press`: sends a keyboard key globally (e.g. Enter to submit a form).
+- After dismissing a cookie banner, do NOT click it again — it is already gone
+  and the next screenshot will show the real page.
 
 Selector types — pick ONE and put the bare value in `selector`:
 - `css`: a real CSS selector, e.g. `input[name='q']`, `#submit`, `.btn-primary`
@@ -173,13 +177,10 @@ class BrowserAgentSkill(BaseSkill):
         try:
             logger.info("iter_actions: starting browser")
             await browser.start()
-            logger.info("iter_actions: browser started, opening blank canvas")
-            # Start at a blank but real page so the first screenshot isn't
-            # about:blank (which produces blank state and confuses the LLM).
-            try:
-                await browser.goto("https://www.google.com")
-            except Exception as exc:
-                logger.warning("iter_actions: initial goto failed: %s", exc)
+            logger.info("iter_actions: browser started, page is about:blank")
+            # Don't pre-navigate. Let the agent's first action be a `goto` to
+            # the right destination — saves 2-3 wasted steps fighting cookie
+            # dialogs on landing pages we never wanted in the first place.
         except Exception as exc:
             logger.exception("iter_actions: browser.start() failed")
             yield AgentEvent(kind="error", text=f"Could not start browser: {exc}")

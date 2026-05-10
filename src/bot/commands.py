@@ -260,6 +260,7 @@ async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_browse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Drive a real browser to advance a goal, with screenshots + confirmations."""
+    logger.info("cmd_browse: entered")
     if not await authorize(update, context):
         return
     if not context.args:
@@ -270,6 +271,7 @@ async def cmd_browse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
     goal = " ".join(context.args)
+    logger.info("cmd_browse: goal=%r", goal)
 
     registry = context.application.bot_data["skill_registry"]
     context_builder = context.application.bot_data["context_builder"]
@@ -284,7 +286,9 @@ async def cmd_browse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await safe_send(chat.send_message, f"🌐 Starting browser session\nGoal: {goal}")
 
     try:
+        logger.info("cmd_browse: starting iter_actions")
         async for event in skill.iter_actions("/browse " + goal, ctx):
+            logger.info("cmd_browse: event kind=%s text=%r", event.kind, (event.text or "")[:120])
             if event.screenshot and event.screenshot.exists():
                 with event.screenshot.open("rb") as fh:
                     await chat.send_photo(photo=fh, caption=event.text[:1000])

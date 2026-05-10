@@ -145,21 +145,37 @@ class BrowserAgentSkill(BaseSkill):
     ) -> AsyncIterator[AgentEvent]:
         goal = self._strip_command(message) or "(no goal given)"
         max_steps = max_steps or self.MAX_STEPS
+        logger.info("iter_actions: goal=%r max_steps=%d", goal, max_steps)
 
         browser = Browser(headless=True)
         screenshots_dir = settings.uploads_dir / "browser"
         history: list[AgentStep] = []
 
         try:
+            logger.info("iter_actions: starting browser")
             await browser.start()
+            logger.info("iter_actions: browser started, opening blank canvas")
+            # Start at a blank but real page so the first screenshot isn't
+            # about:blank (which produces blank state and confuses the LLM).
+            try:
+                await browser.goto("https://www.google.com")
+            except Exception as exc:
+                logger.warning("iter_actions: initial goto failed: %s", exc)
         except Exception as exc:
+            logger.exception("iter_actions: browser.start() failed")
             yield AgentEvent(kind="error", text=f"Could not start browser: {exc}")
             return
 
         try:
             for step_index in range(1, max_steps + 1):
+                logger.info("iter_actions: step %d — capturing state", step_index)
                 state = await browser.state(screenshots_dir)
+                logger.info("iter_actions: state url=%s title=%s", state.url, state.title)
                 step = await self._decide_next(goal, history, state, browser)
+                logger.info(
+                    "iter_actions: decided action=%s selector=%r needs_conf=%s",
+                    step.action, step.selector, step.needs_confirmation,
+                )
                 step.screenshot_path = state.screenshot_path
                 step.page_url = state.url
                 step.page_title = state.title

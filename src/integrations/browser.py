@@ -1,13 +1,17 @@
 """Playwright wrapper used by the browser-agent skill.
 
-Each `Browser` instance owns one Chromium context. Methods are async and
-return useful summaries (page title, URL, screenshot bytes) for the
-orchestrator to feed back to Claude.
+Each `Browser` instance owns one Chromium (or Firefox) context. Methods are
+async and return useful summaries (page title, URL, screenshot bytes) for
+the orchestrator to feed back to Claude.
+
+Set ``BROWSER_ENGINE=firefox`` in env to switch from Chromium to Firefox
+(useful when a target site fingerprints Chromium aggressively).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,22 +61,33 @@ class Browser:
                 "`playwright install chromium` in the container."
             ) from exc
 
+        engine = (os.getenv("BROWSER_ENGINE") or "chromium").lower()
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=self.headless,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-            ],
-        )
+        if engine == "firefox":
+            self._browser = await self._playwright.firefox.launch(headless=self.headless)
+        else:
+            self._browser = await self._playwright.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
         self._context = await self._browser.new_context(
             viewport={"width": self.viewport[0], "height": self.viewport[1]},
             locale="es-ES",
+            timezone_id="Europe/Madrid",
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
+        )
+        # Hide the navigator.webdriver flag — Playwright sets it by default,
+        # which trivial bot detectors check for.
+        await self._context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
         self._page = await self._context.new_page()
 
@@ -97,9 +112,31 @@ class Browser:
             self._playwright = None
 
     # --- Navigation -----------------------------------------------------
-    async def goto(self, url: str, wait_until: str = "networkidle", timeout: float = 30000) -> None:
+    async def goto(
+        self,
+        url: str,
+        wait_until: str = "domcontentloaded",
+        timeout: float = 45000,
+    ) -> None:
+        """Navigate with a forgiving wait strategy.
+
+        ``networkidle`` never resolves on tracker-heavy SPAs (Renfe, LinkedIn,
+        booking sites). ``domcontentloaded`` returns once the DOM is ready;
+        we then sleep a short tick to let the initial JS paint before the
+        screenshot is taken."""
         await self.start()
-        await self._page.goto(url, wait_until=wait_until, timeout=timeout)
+        try:
+            await self._page.goto(url, wait_until=wait_until, timeout=timeout)
+        except Exception as exc:
+            # Tolerate timeouts: the page may still be usable (lazy assets
+            # haven't finished but the main content is there).
+            logger.warning("goto(%s) timeout/error: %s — continuing", url, exc)
+        # Give the SPA a moment to render before the next screenshot.
+        try:
+            await self._page.wait_for_load_state("load", timeout=8000)
+        except Exception:
+            pass
+        await asyncio.sleep(1.5)
 
     async def click_text(self, text: str, timeout: float = 5000) -> bool:
         await self.start()
@@ -153,8 +190,17 @@ class Browser:
         await self.start()
         screenshot_dir.mkdir(parents=True, exist_ok=True)
         path = screenshot_dir / f"step_{int(asyncio.get_event_loop().time() * 1000)}.png"
+        # Try to wait for visible content before screenshotting so the image
+        # isn't a blank white frame.
         try:
-            await self._page.screenshot(path=str(path), full_page=False)
+            await self._page.wait_for_function(
+                "() => document.body && document.body.innerText.length > 30",
+                timeout=8000,
+            )
+        except Exception:
+            pass
+        try:
+            await self._page.screenshot(path=str(path), full_page=False, timeout=15000)
         except Exception as exc:
             logger.warning("screenshot failed: %s", exc)
             path = None

@@ -77,9 +77,9 @@ class EmailInboxSkill(BaseSkill):
         if not self.enabled:
             return SkillResponse(
                 text=(
-                    "Gmail no está conectado todavía. Configura "
-                    "`GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` y "
-                    "`GMAIL_REFRESH_TOKEN` en `.env` y reinicia el bot."
+                    "Gmail isn't connected yet. Set `GMAIL_CLIENT_ID`, "
+                    "`GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` in `.env` "
+                    "and restart the bot."
                 ),
                 metadata={"skill": self.name, "disabled": True},
             )
@@ -89,13 +89,13 @@ class EmailInboxSkill(BaseSkill):
         except Exception as exc:
             logger.warning("Gmail list_unread failed: %s", exc)
             return SkillResponse(
-                text=f"⚠️ No pude leer Gmail: {exc}",
+                text=f"⚠️ Couldn't read Gmail: {exc}",
                 metadata={"skill": self.name, "error": str(exc)},
             )
 
         if not unread:
             return SkillResponse(
-                text="✅ Bandeja al día — ningún correo sin leer.",
+                text="✅ Inbox zero — nothing unread.",
                 metadata={"skill": self.name, "count": 0},
             )
 
@@ -110,7 +110,7 @@ class EmailInboxSkill(BaseSkill):
             model_tier="fast",
             max_tokens=600,
         )
-        header = f"**📬 {len(unread)} correos sin leer**\n\n"
+        header = f"**📬 {len(unread)} unread**\n\n"
         return SkillResponse(
             text=header + summary.strip(),
             metadata={

@@ -73,10 +73,14 @@ async def _bot_read_source(args: dict, context: "Context") -> str:
 BOT_READ_SOURCE = Tool(
     name="bot_read_source",
     description=(
-        "Read a file (or list a directory) from the bot's own source tree. "
-        "Use to understand HOW the bot works before proposing a change. "
-        "Allowed roots: src/, tests/, scripts/, alembic/, docs/, "
-        "prompts/, Dockerfile, docker-compose.yml, requirements.txt."
+        "FAST LOOKUP — read one file (or list one directory) from the "
+        "bot's own source tree. Use ONLY for trivial single-file "
+        "questions where the answer fits on screen ('show me this "
+        "function', 'what's in AGENTS.md'). For anything bigger (deep "
+        "dive, audit, multi-file analysis) use claude_code instead — "
+        "it's far better at navigating the repo. Allowed roots: src/, "
+        "tests/, scripts/, alembic/, docs/, prompts/, Dockerfile, "
+        "docker-compose.yml, requirements.txt."
     ),
     input_schema={
         "type": "object",
@@ -117,9 +121,10 @@ async def _bot_grep_source(args: dict, context: "Context") -> str:
 BOT_GREP_SOURCE = Tool(
     name="bot_grep_source",
     description=(
-        "grep -E across the bot's source tree. Use to find where a function, "
-        "class, env var, or string lives before proposing a change. Default "
-        "glob: src/**/*.py."
+        "FAST LOOKUP — grep -E across the bot's source tree. Use ONLY "
+        "for one-shot 'where is X defined' questions. For deeper code "
+        "investigation use claude_code which navigates with full repo "
+        "context. Default glob: src/**/*.py."
     ),
     input_schema={
         "type": "object",

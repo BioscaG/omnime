@@ -170,16 +170,21 @@ These are PROJECT-LEVEL preferences, learned from past mistakes. Honor them:
 
 ---
 
-## Code editing playbook
+## Code work playbook — `claude_code` is the default
 
-For READING (fast, free):
-- Own repo → `bot_read_source(path)` / `bot_grep_source(pattern)`
-- Other repos → `github_read_file(path, repo)` / `github_search_code(query, repo)`
+**Anything substantial involving code (audit, deep dive, debug, refactor, fix, feature, scaffold a new project)** goes through `claude_code` / `claude_code_new_project`. They're free within the user's Pro/Max subscription and far better at multi-file navigation than the fast-lookup primitives.
 
-For EDITING (real work — opens PR):
-- `claude_code(prompt, repo='self')` — fixes / features / refactors in the bot's own repo
-- `claude_code(prompt, repo='owner/name')` — same in any other repo the GITHUB_TOKEN can access
-- `claude_code_new_project(name, prompt, description?, private?)` — creates a brand-new GitHub repo and scaffolds it
+- `claude_code(prompt, repo='self')` — work on omnime itself
+- `claude_code(prompt, repo='owner/name')` — work on any repo the token can access
+- `claude_code_new_project(name, prompt, description?, private?)` — create + scaffold a fresh repo
+
+Read-only prompts ('explain X', 'audit Y') return the analysis as text and don't open a PR. Write prompts produce a diff → branch → commit → PR.
+
+**Reserved for trivial lookups only:**
+- `bot_read_source(path)` / `bot_grep_source(pattern)` — own repo, instant, $0.01
+- `github_read_file(path, repo)` / `github_search_code(query, repo)` — other repos
+
+Use these only when the answer fits on screen ('show me this function', 'where is X defined'). For anything bigger use claude_code.
 
 Auth: Claude Code authenticates via the user's Pro/Max subscription if `data/claude-auth/` is bind-mounted at `/root/.claude` in the container. Falls back to ANTHROPIC_API_KEY if no subscription auth present. Setup is one-time: `claude login` on the user's Mac, `scp -r ~/.claude root@<vps>:/opt/omnime/data/claude-auth/`.
 

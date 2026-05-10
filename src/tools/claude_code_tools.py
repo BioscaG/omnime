@@ -212,17 +212,24 @@ async def _claude_code(args: dict, context: "Context") -> str:
 CLAUDE_CODE = Tool(
     name="claude_code",
     description=(
-        "Real code editor — clones a GitHub repo into a fresh /tmp dir, "
-        "runs Claude Code with the supplied prompt (multi-file edits, "
-        "runs tests, iterates), commits the diff to a new branch, opens "
-        "a PR. ONLY call when the user EXPLICITLY says 'usa claude "
-        "code' / 'with claude code' / 'open a PR with claude code'. "
-        "NEVER call for simple reads (use bot_read_source / "
-        "bot_grep_source / github_read_file instead) or for trivial "
-        "single-file edits where you can produce the whole file "
-        "yourself. ``repo='self'`` (default) targets the bot's own repo; "
-        "any 'owner/name' targets a different repo the GitHub token can "
-        "access. Returns the PR URL."
+        "DEFAULT TOOL FOR CODE WORK — clones a GitHub repo into a fresh "
+        "/tmp dir, runs Claude Code with your prompt (multi-file aware, "
+        "navigates the repo, can run tests, iterates). If the prompt "
+        "produces a diff: branch + commit + push + open PR. If the "
+        "prompt is read-only ('explain X', 'audit Y'): returns the "
+        "analysis as text with no PR. Use this for ANY substantial "
+        "code task: deep-dive into a repo, debug, refactor, fix, add "
+        "feature, audit. Uses the user's Pro/Max subscription = free "
+        "within plan limits. \n\n"
+        "Reserve bot_read_source / bot_grep_source / github_read_file "
+        "for one-line trivial lookups only. \n\n"
+        "WRITE confirmation: when the prompt would change files, "
+        "FIRST diagnose + propose to the user in chat and WAIT for "
+        "explicit confirmation ('sí', 'arréglalo', 'abre PR'). Read-only "
+        "prompts ('explica X') don't need confirmation. \n\n"
+        "``repo='self'`` (default) targets the bot's own repo; any "
+        "'owner/name' targets a different repo the GitHub token can "
+        "access."
     ),
     input_schema={
         "type": "object",

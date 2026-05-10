@@ -362,15 +362,27 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await safe_send(chat.send_message, f"📄 Stored **{doc.file_name}** (no text extracted).")
         return
 
-    # 1. Classify + summarise the document.
+    # Light-mode for project source files: code / markup / bibliography.
+    # Per-file DocumentAnalyzer + entity extractor would create one
+    # 'project' / set of 'skills' per chapter, generating spurious
+    # duplicates. We just chunk + index. Deep analysis is triggered
+    # explicitly by the user via claude_code_analyze on the whole batch.
+    src_suffix = path.suffix.lower()
+    light_mode = src_suffix in TEXT_SUFFIXES and src_suffix not in {".txt", ".md", ".csv"}
+
     from src.skills.document_analyzer import DocumentAnalyzer, chunk_text
 
-    analyzer = DocumentAnalyzer(llm)
-    analysis = await analyzer.analyze(extracted)
+    analysis = None
+    if not light_mode:
+        analyzer = DocumentAnalyzer(llm)
+        analysis = await analyzer.analyze(extracted)
 
     # 2. Persist the file row with rich metadata.
     from src.memory.db import session_scope
     from src.memory.structured import StructuredStore
+
+    category = (analysis.category if analysis else None) or "source"
+    title = (analysis.title if analysis else None) or doc.file_name
 
     with session_scope() as s:
         StructuredStore(s).add_file(
@@ -379,17 +391,18 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             file_type=doc.mime_type,
             telegram_file_id=doc.file_id,
             extracted_text=extracted[:50000],
-            summary=analysis.summary or None,
-            tags=analysis.tags or None,
+            summary=(analysis.summary if analysis else None),
+            tags=(analysis.tags if analysis else None),
             extra_metadata={
-                "category": analysis.category,
-                "title": analysis.title,
-                "language": analysis.language,
-                "key_entities": analysis.key_entities,
+                "category": category,
+                "title": title,
+                "language": (analysis.language if analysis else None),
+                "key_entities": (analysis.key_entities if analysis else None),
+                "session": rel_name.split("/")[0] if "/" in rel_name else None,
             },
         )
 
-    # 3. Chunk the full text and index every chunk semantically.
+    # Chunk + index for files_search regardless of mode.
     chunks = chunk_text(extracted, target_chars=1800, overlap=200)
     for i, chunk_text_value in enumerate(chunks):
         try:
@@ -399,7 +412,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 metadata={
                     "user_id": user_id_db,
                     "filename": rel_name,
-                    "category": analysis.category,
+                    "category": category,
                     "chunk": i,
                     "of": len(chunks),
                 },
@@ -407,39 +420,45 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as exc:
             logger.warning("Document chunk %d indexing failed: %s", i, exc)
 
-    # 4. Run the entity extractor over any document with substantial text.
-    # The analyzer's `should_extract_personal` flag was too conservative —
-    # dropping facts from contracts, invoices, papers etc. The extractor's
-    # own dedup logic handles spam-prevention; cost is bounded by the
-    # 8000-char cap.
+    # Entity extractor only for stand-alone documents, not project source.
     extraction_summary = ""
-    if extracted and len(extracted) > 200:
+    if not light_mode and extracted and len(extracted) > 200:
         try:
             result = await memory.process_and_store(
                 user_id=user_id_db,
                 message=extracted[:8000],
                 context_hint=(
                     f"This text comes from an uploaded document classified "
-                    f"as '{analysis.category}', titled '{analysis.title or doc.file_name}'."
+                    f"as '{category}', titled '{title}'."
                 ),
             )
             extraction_summary = result.stored_summary
         except Exception as exc:
             logger.warning("Document entity extraction failed: %s", exc)
 
-    # 5. Reply with a structured receipt.
-    bullets: list[str] = []
-    bullets.append(f"📄 **{analysis.title or doc.file_name}**")
-    bullets.append(f"Type: `{analysis.category}` · {len(chunks)} chunk(s) indexed · saved to files")
-    if analysis.tags:
-        bullets.append(f"Tags: {', '.join(analysis.tags)}")
-    if analysis.summary:
-        bullets.append(f"\n{analysis.summary}")
-    if analysis.key_entities:
-        bullets.append(f"\n_Mentioned: {', '.join(analysis.key_entities[:6])}_")
-    if extraction_summary and extraction_summary != "nothing new":
-        bullets.append(f"\n💾 Saved to memory: {extraction_summary}")
-    bullets.append("\n_Ask me anything about it later — I can search across your files._")
+    # Receipt — terse for light-mode (just acknowledge), rich for full-mode.
+    if light_mode:
+        session_label = rel_name.split("/")[0] if "/" in rel_name else "(root)"
+        bullets = [
+            f"📎 **{doc.file_name}** added to `{session_label}/` "
+            f"({len(chunks)} chunk(s) indexed)."
+        ]
+        bullets.append(
+            "_Tip: ask me to analyse the whole batch ('analiza mi TFG') "
+            "and I'll send the project to Claude Code._"
+        )
+    else:
+        bullets = [f"📄 **{title}**"]
+        bullets.append(f"Type: `{category}` · {len(chunks)} chunk(s) indexed · saved to files")
+        if analysis and analysis.tags:
+            bullets.append(f"Tags: {', '.join(analysis.tags)}")
+        if analysis and analysis.summary:
+            bullets.append(f"\n{analysis.summary}")
+        if analysis and analysis.key_entities:
+            bullets.append(f"\n_Mentioned: {', '.join(analysis.key_entities[:6])}_")
+        if extraction_summary and extraction_summary != "nothing new":
+            bullets.append(f"\n💾 Saved to memory: {extraction_summary}")
+        bullets.append("\n_Ask me anything about it later._")
 
     await safe_send(chat.send_message, "\n".join(bullets))
 

@@ -18,6 +18,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ffmpeg \
     openssh-client \
+    # Chromium runtime deps for Playwright (replacing `--with-deps`, which
+    # tries to install package names that don't exist on Debian Bookworm).
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libdbus-1-3 \
+    libxcb1 \
+    libxkbcommon0 \
+    libatspi2.0-0 \
+    libx11-6 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    fonts-liberation \
+    fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-extras.txt ./
@@ -25,11 +49,11 @@ RUN pip install --upgrade pip && \
     pip install -r requirements.txt && \
     if [ "$WITH_EXTRAS" = "1" ]; then pip install -r requirements-extras.txt; fi
 
-# Install Chromium + system deps for Playwright. Heavy (~300 MB) but required
-# for /browse. To skip: build with --build-arg WITH_BROWSER=0.
+# Install Chromium for Playwright (~150 MB). System deps are already installed
+# above. To skip: build with --build-arg WITH_BROWSER=0.
 ARG WITH_BROWSER=1
 RUN if [ "$WITH_BROWSER" = "1" ]; then \
-      playwright install --with-deps chromium; \
+      playwright install chromium; \
     fi
 
 COPY src/ ./src/

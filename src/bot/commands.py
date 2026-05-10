@@ -258,6 +258,121 @@ async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_skill(update, context, "web_fetch", "/fetch " + url)
 
 
+async def cmd_browse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Drive a real browser to advance a goal, with screenshots + confirmations."""
+    if not await authorize(update, context):
+        return
+    if not context.args:
+        await safe_send(
+            update.effective_message.reply_text,
+            "Usage: /browse <goal>\n"
+            "Example: /browse busca tren Madrid-Barcelona mañana 12:00 en renfe.com",
+        )
+        return
+    goal = " ".join(context.args)
+
+    registry = context.application.bot_data["skill_registry"]
+    context_builder = context.application.bot_data["context_builder"]
+    user_id_db = context.application.bot_data["user_id_db"]
+    skill = registry.get("browser_agent")
+    if skill is None:
+        await safe_send(update.effective_message.reply_text, "Browser agent not available.")
+        return
+
+    chat = update.effective_chat
+    ctx = await context_builder.build(user_id_db, "/browse " + goal)
+    await safe_send(chat.send_message, f"🌐 Starting browser session\nGoal: {goal}")
+
+    try:
+        async for event in skill.iter_actions("/browse " + goal, ctx):
+            if event.screenshot and event.screenshot.exists():
+                with event.screenshot.open("rb") as fh:
+                    await chat.send_photo(photo=fh, caption=event.text[:1000])
+            else:
+                await safe_send(chat.send_message, event.text or "(no text)")
+
+            if event.kind == "needs_confirmation":
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+                state = context.application.bot_data.setdefault("browser_pending", {})
+                state[user_id_db] = {"goal": goal, "step": event.step}
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Continue", callback_data="browse:continue"),
+                    InlineKeyboardButton("✏️ Edit", callback_data="browse:edit"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="browse:cancel"),
+                ]])
+                await chat.send_message(
+                    "Awaiting your decision before continuing.", reply_markup=kb,
+                )
+                return
+            if event.kind in ("done", "error"):
+                return
+    except Exception as exc:
+        logger.exception("Browser session crashed")
+        await safe_send(chat.send_message, f"Browser crash: {exc}")
+
+
+async def cmd_creds(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manage encrypted site credentials."""
+    if not await authorize(update, context):
+        return
+    args = context.args or []
+    user_id_db = context.application.bot_data["user_id_db"]
+
+    from src.utils.credentials import CredentialVault
+
+    if not args:
+        sites = CredentialVault.list_sites(user_id_db)
+        if not sites:
+            await safe_send(
+                update.effective_message.reply_text,
+                "No credentials stored.\n\n"
+                "Usage:\n"
+                "  /creds add <site> <username> <password> [login_url]\n"
+                "  /creds list\n"
+                "  /creds delete <site>",
+            )
+            return
+        await safe_send(
+            update.effective_message.reply_text,
+            "Stored sites:\n" + "\n".join(f"• {s}" for s in sites),
+        )
+        return
+
+    sub = args[0].lower()
+    if sub == "list":
+        sites = CredentialVault.list_sites(user_id_db)
+        await safe_send(update.effective_message.reply_text,
+                        "Stored: " + (", ".join(sites) or "(none)"))
+        return
+    if sub == "delete" and len(args) >= 2:
+        ok = CredentialVault.delete(user_id_db, args[1])
+        await safe_send(update.effective_message.reply_text,
+                        "Deleted." if ok else "Not found.")
+        return
+    if sub == "add" and len(args) >= 4:
+        site, username, password = args[1], args[2], args[3]
+        login_url = args[4] if len(args) >= 5 else None
+        try:
+            CredentialVault.store(
+                user_id=user_id_db, site=site,
+                username=username, password=password, login_url=login_url,
+            )
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            await safe_send(
+                update.effective_chat.send_message,
+                f"🔐 Stored credentials for `{site}` (encrypted at rest).",
+            )
+        except Exception as exc:
+            await safe_send(update.effective_message.reply_text, f"Failed: {exc}")
+        return
+
+    await safe_send(update.effective_message.reply_text, "Unknown /creds subcommand.")
+
+
 async def cmd_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle whether the next reply also gets a TTS voice note."""
     if not await authorize(update, context):

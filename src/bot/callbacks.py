@@ -27,7 +27,36 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("evolve:"):
         await _handle_evolve_callback(query, context, data)
         return
+    if data.startswith("browse:"):
+        await _handle_browse_callback(query, context, data)
+        return
     await query.edit_message_text(f"Action received: {data}")
+
+
+async def _handle_browse_callback(query, context, data: str) -> None:
+    action = data.split(":", 1)[1]
+    state = context.application.bot_data.get("browser_pending", {})
+    user_id_db = context.application.bot_data["user_id_db"]
+    pending = state.pop(user_id_db, None)
+
+    if action == "cancel" or pending is None:
+        await query.edit_message_text("🛑 Browser session cancelled.")
+        return
+    if action == "edit":
+        await query.edit_message_text(
+            "Reply with a new instruction starting with /browse to redirect the agent."
+        )
+        return
+    if action == "continue":
+        # Re-launch the agent with augmented goal so it carries past the confirmation gate.
+        await query.edit_message_text("✅ Resuming…")
+        from src.bot.commands import cmd_browse  # noqa: E402
+
+        # Synthesize the equivalent of /browse <goal>. Reusing the command path
+        # keeps confirmation logic centralised.
+        original_args = (pending["goal"] + " (resume past confirmation)").split()
+        context.args = original_args
+        await cmd_browse(query.message, context)
 
 
 async def _handle_email_callback(query, context, data: str) -> None:

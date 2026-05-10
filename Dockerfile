@@ -25,6 +25,13 @@ RUN pip install --upgrade pip && \
     pip install -r requirements.txt && \
     if [ "$WITH_EXTRAS" = "1" ]; then pip install -r requirements-extras.txt; fi
 
+# Install Chromium + system deps for Playwright. Heavy (~300 MB) but required
+# for /browse. To skip: build with --build-arg WITH_BROWSER=0.
+ARG WITH_BROWSER=1
+RUN if [ "$WITH_BROWSER" = "1" ]; then \
+      playwright install --with-deps chromium; \
+    fi
+
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY alembic/ ./alembic/

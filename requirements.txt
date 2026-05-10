@@ -37,6 +37,10 @@ PyGithub==2.5.0
 beautifulsoup4==4.12.3
 duckduckgo-search==6.4.2
 
+# Browser automation. The actual Chromium binary is installed in the Dockerfile
+# via `playwright install --with-deps chromium` (~300 MB).
+playwright==1.49.1
+
 # OCR / file processing
 pypdf==5.1.0
 Pillow==11.0.0

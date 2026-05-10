@@ -408,6 +408,41 @@ class MemorySummary(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class Credential(Base):
+    __tablename__ = "credentials"
+    __table_args__ = (
+        # Composite uniqueness keeps one row per (user, site).
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    site: Mapped[str] = mapped_column(String(255), nullable=False)
+    login_url: Mapped[Optional[str]] = mapped_column(String(500))
+    username_enc: Mapped[Optional[str]] = mapped_column(Text)
+    password_enc: Mapped[Optional[str]] = mapped_column(Text)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class BrowserSession(Base):
+    __tablename__ = "browser_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="running")
+    steps_taken: Mapped[int] = mapped_column(Integer, default=0)
+    final_url: Mapped[Optional[str]] = mapped_column(String(1000))
+    transcript: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
 class FileRecord(Base):
     __tablename__ = "files"
 

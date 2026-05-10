@@ -107,6 +107,7 @@ def _register_default_skills(registry: SkillRegistry) -> None:
     from src.skills.time_machine import TimeMachineSkill
     from src.skills.agentic import AgenticSkill
     from src.skills.web_fetch import WebFetchSkill
+    from src.skills.browser_agent import BrowserAgentSkill
 
     for cls in (
         CVGeneratorSkill,
@@ -128,6 +129,7 @@ def _register_default_skills(registry: SkillRegistry) -> None:
         TimeMachineSkill,
         AgenticSkill,
         WebFetchSkill,
+        BrowserAgentSkill,
     ):
         try:
             registry.register(cls(registry.llm, registry.memory))

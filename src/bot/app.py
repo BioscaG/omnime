@@ -46,6 +46,8 @@ COMMAND_DESCRIPTIONS = [
     ("backup", "Create a backup"),
     ("usage", "Show LLM token usage and estimated cost"),
     ("fetch", "Read a public URL and store its content"),
+    ("browse", "Drive a real browser with screenshots + confirmation"),
+    ("creds", "Manage encrypted site credentials"),
 ]
 
 
@@ -117,6 +119,8 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("agent", commands.cmd_plan))
     application.add_handler(CommandHandler("fetch", commands.cmd_fetch))
     application.add_handler(CommandHandler("url", commands.cmd_fetch))
+    application.add_handler(CommandHandler("browse", commands.cmd_browse))
+    application.add_handler(CommandHandler("creds", commands.cmd_creds))
 
     application.add_handler(CallbackQueryHandler(callbacks.handle_callback))
     application.add_handler(InlineQueryHandler(inline.handle_inline_query))

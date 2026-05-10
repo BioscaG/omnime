@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     enable_prompt_caching: bool = Field(default=True, alias="ENABLE_PROMPT_CACHING")
     enable_streaming: bool = Field(default=True, alias="ENABLE_STREAMING")
 
+    # --- Browser agent tuning ---
+    # Tier for the per-step decision LLM. `tiny` (Haiku) is ~5× cheaper than
+    # `fast` (Sonnet) and usually enough for clicking through forms.
+    browser_model_tier: str = Field(default="tiny", alias="BROWSER_MODEL_TIER")
+    # Max width of the screenshot fed to the vision model. Smaller = cheaper.
+    browser_screenshot_width: int = Field(default=1024, alias="BROWSER_SCREENSHOT_WIDTH")
+    # JPEG quality 1-100. 60 is small + still readable for Claude.
+    browser_screenshot_quality: int = Field(default=60, alias="BROWSER_SCREENSHOT_QUALITY")
+
     # --- Backups ---
     backup_enabled: bool = Field(default=True, alias="BACKUP_ENABLED")
     backup_at: str = Field(default="03:00", alias="BACKUP_AT")

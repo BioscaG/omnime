@@ -236,6 +236,27 @@ async def cmd_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run the agentic multi-step planner."""
+    if not await authorize(update, context):
+        return
+    if not context.args:
+        await safe_send(update.effective_message.reply_text, "Usage: /plan <goal>")
+        return
+    goal = " ".join(context.args)
+    await _run_skill(update, context, "agentic", "/plan " + goal)
+
+
+async def cmd_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle whether the next reply also gets a TTS voice note."""
+    if not await authorize(update, context):
+        return
+    flags = context.application.bot_data.setdefault("flags", {})
+    flags["voice_reply"] = not flags.get("voice_reply", False)
+    state = "on" if flags["voice_reply"] else "off"
+    await safe_send(update.effective_message.reply_text, f"Voice replies: {state}")
+
+
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await authorize(update, context):
         return

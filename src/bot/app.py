@@ -9,11 +9,12 @@ from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
+    InlineQueryHandler,
     MessageHandler,
     filters,
 )
 
-from src.bot import callbacks, commands, handlers, middleware
+from src.bot import callbacks, commands, handlers, inline, middleware
 from src.brain.context_builder import ContextBuilder
 from src.brain.llm_client import LLMClient
 from src.brain.orchestrator import Orchestrator
@@ -110,8 +111,12 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("goal", commands.cmd_goal))
     application.add_handler(CommandHandler("private", commands.cmd_private))
     application.add_handler(CommandHandler("usage", commands.cmd_usage))
+    application.add_handler(CommandHandler("voice", commands.cmd_voice_reply))
+    application.add_handler(CommandHandler("plan", commands.cmd_plan))
+    application.add_handler(CommandHandler("agent", commands.cmd_plan))
 
     application.add_handler(CallbackQueryHandler(callbacks.handle_callback))
+    application.add_handler(InlineQueryHandler(inline.handle_inline_query))
     application.add_handler(MessageHandler(filters.VOICE, handlers.handle_voice))
     application.add_handler(MessageHandler(filters.Document.ALL, handlers.handle_document))
     application.add_handler(MessageHandler(filters.PHOTO, handlers.handle_photo))

@@ -302,6 +302,18 @@ def _schedule_jobs(application: Application, memory: MemoryManager, llm: LLMClie
     # Every 2 minutes — fine-grained enough that 'remind me in 5 min' feels timely.
     job_queue.run_repeating(reminders_dispatcher_job, interval=2 * 60, first=60)
 
+    async def health_check_job(context):
+        try:
+            from src.brain.health import run_health_check
+
+            await run_health_check(application)
+        except Exception as exc:
+            logger.warning("Health check failed: %s", exc)
+
+    # Every 6 hours — catches token expiry / revoked permissions.
+    # First run after 10 min (gives proactive scanner room).
+    job_queue.run_repeating(health_check_job, interval=6 * 3600, first=10 * 60)
+
     if settings.backup_enabled:
         try:
             bhh, bmm = (int(x) for x in settings.backup_at.split(":"))

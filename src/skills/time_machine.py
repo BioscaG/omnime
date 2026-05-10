@@ -70,19 +70,17 @@ class TimeMachineSkill(BaseSkill):
             return None
 
     def _snapshot(self, user_id: int, at_date: date) -> str:
-        cutoff = datetime.combine(at_date, datetime.max.time())
         with session_scope() as s:
             projects = list(s.scalars(
                 select(m.Project).where(
                     m.Project.user_id == user_id,
-                    m.Project.created_at <= cutoff,
+                    or_(m.Project.start_date.is_(None), m.Project.start_date <= at_date),
                     or_(m.Project.end_date.is_(None), m.Project.end_date >= at_date),
                 )
             ))
             jobs = list(s.scalars(
                 select(m.WorkExperience).where(
                     m.WorkExperience.user_id == user_id,
-                    m.WorkExperience.created_at <= cutoff,
                     or_(
                         m.WorkExperience.end_date.is_(None),
                         m.WorkExperience.end_date >= at_date,
@@ -94,10 +92,7 @@ class TimeMachineSkill(BaseSkill):
                 )
             ))
             goals = list(s.scalars(
-                select(m.Goal).where(
-                    m.Goal.user_id == user_id,
-                    m.Goal.created_at <= cutoff,
-                )
+                select(m.Goal).where(m.Goal.user_id == user_id)
             ))
             achievements = list(s.scalars(
                 select(m.Achievement).where(

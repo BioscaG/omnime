@@ -42,6 +42,7 @@ QUESTION_BANK: list[tuple[str, str]] = [
 class OnboardingState:
     index: int = 0
     answers: dict[str, str] = field(default_factory=dict)
+    started: bool = False
 
 
 class CareerOnboardingSkill(BaseSkill):
@@ -68,11 +69,12 @@ class CareerOnboardingSkill(BaseSkill):
 
     async def execute(self, message: str, context: "Context") -> SkillResponse:
         state: OnboardingState = self._get_state(context, OnboardingState())
-        if message.strip().lower() in ("/onboard", "/onboarding") or state.index == 0 and not state.answers:
-            state = OnboardingState()
+        cmd = message.strip().lower()
+
+        if cmd in ("/onboard", "/onboarding") or not state.started:
+            state = OnboardingState(started=True, index=0)
             self._set_state(context, state)
             key, question = QUESTION_BANK[0]
-            state.index = 0
             return SkillResponse(
                 text=(
                     f"📝 Onboarding interview ({len(QUESTION_BANK)} short questions). "
@@ -82,11 +84,12 @@ class CareerOnboardingSkill(BaseSkill):
                 metadata={"onboarding": True, "current_key": key},
             )
 
-        cmd = message.strip().lower()
         if cmd == "/done":
             return await self._finalise(context, state)
         if cmd == "/skip":
             state.index += 1
+            if state.index >= len(QUESTION_BANK):
+                return await self._finalise(context, state)
             return self._next(state, skipped=True)
 
         # Capture the answer for the *current* question.

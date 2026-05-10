@@ -46,8 +46,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-MAX_TIMEOUT = 600
-DEFAULT_TIMEOUT = 300
+MAX_TIMEOUT = 1200      # 20 minutes — enough for big repos / dense projects
+DEFAULT_TIMEOUT = 600   # 10 minutes — works for most TFG-size jobs
 
 
 def _has_claude_cli() -> bool:
@@ -133,7 +133,7 @@ async def _claude_code(args: dict, context: "Context") -> str:
     timeout = int(args.get("timeout") or DEFAULT_TIMEOUT)
     timeout = max(60, min(MAX_TIMEOUT, timeout))
     base_branch = (args.get("base_branch") or "main").strip()
-    via_pr = bool(args.get("via_pr", False))  # default: direct push to base_branch
+    via_pr = bool(args.get("via_pr", False))
 
     workdir = Path(tempfile.mkdtemp(prefix="omnime-claude-"))
     try:

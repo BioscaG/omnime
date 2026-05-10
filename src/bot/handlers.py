@@ -1,8 +1,10 @@
-"""Top-level message handlers: text, voice, documents, forwards."""
+"""Top-level message handlers: text, voice, documents, photos, forwarded."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
+from typing import Optional
 
 from telegram import Update
 from telegram.constants import ChatAction
@@ -15,6 +17,33 @@ from src.utils.formatters import chunk, safe_send
 
 logger = logging.getLogger(__name__)
 
+
+# --- Whisper singleton -------------------------------------------------------
+
+_whisper_model = None
+_whisper_lock = asyncio.Lock()
+
+
+async def _get_whisper_model():
+    global _whisper_model
+    if _whisper_model is not None:
+        return _whisper_model
+    async with _whisper_lock:
+        if _whisper_model is None:
+            def _load():
+                import whisper
+                return whisper.load_model("base")
+            _whisper_model = await asyncio.to_thread(_load)
+    return _whisper_model
+
+
+async def _transcribe(path: Path) -> str:
+    model = await _get_whisper_model()
+    result = await asyncio.to_thread(model.transcribe, str(path))
+    return (result.get("text") or "").strip()
+
+
+# --- Sending -----------------------------------------------------------------
 
 async def _send_response(update: Update, response) -> None:
     chat = update.effective_chat
@@ -61,12 +90,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     memory = context.application.bot_data["memory"]
     user_id_db = context.application.bot_data["user_id_db"]
 
+    forwarded = _forwarded_origin(msg)
+    incoming = msg.text
+    if forwarded:
+        incoming = f"[forwarded from {forwarded}]\n{incoming}"
+
     memory.log_message(
-        user_id=user_id_db, text=msg.text, role="user",
+        user_id=user_id_db, text=incoming, role="user",
         telegram_message_id=msg.message_id,
     )
 
-    response = await orchestrator.process_message(user_id=user_id_db, message=msg.text)
+    response = await orchestrator.process_message(user_id=user_id_db, message=incoming)
 
     await _send_response(update, response)
 
@@ -96,19 +130,18 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     audio_path = settings.uploads_dir / f"voice_{msg.message_id}.ogg"
     await voice_file.download_to_drive(audio_path)
 
-    text = ""
     try:
-        text = _transcribe(audio_path)
+        text = await _transcribe(audio_path)
     except Exception as exc:
         logger.warning("Voice transcription failed: %s", exc)
-        await chat.send_message("Couldn't transcribe the audio.")
+        await safe_send(chat.send_message, "Couldn't transcribe the audio.")
         return
 
     if not text:
-        await chat.send_message("Empty transcription, try again.")
+        await safe_send(chat.send_message, "Empty transcription, try again.")
         return
 
-    await chat.send_message(f"🎙 Transcribed: _{text}_", parse_mode=ParseMode.MARKDOWN)
+    await safe_send(chat.send_message, f"🎙 Transcribed: _{text}_")
 
     orchestrator = context.application.bot_data["orchestrator"]
     memory = context.application.bot_data["memory"]
@@ -116,14 +149,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     memory.log_message(user_id=user_id_db, text=text, role="user", telegram_message_id=msg.message_id)
     response = await orchestrator.process_message(user_id=user_id_db, message=text)
     await _send_response(update, response)
-
-
-def _transcribe(path: Path) -> str:
-    import whisper
-
-    model = whisper.load_model("base")
-    result = model.transcribe(str(path))
-    return (result.get("text") or "").strip()
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -144,7 +169,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     path = settings.uploads_dir / (doc.file_name or f"doc_{msg.message_id}")
     await file.download_to_drive(path)
 
-    extracted = _extract_text(path)
+    extracted = await asyncio.to_thread(_extract_text, path)
     memory = context.application.bot_data["memory"]
     user_id_db = context.application.bot_data["user_id_db"]
 
@@ -174,7 +199,75 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         extracted[:600] + ("..." if extracted and len(extracted) > 600 else "")
         if extracted else "(no text extracted)"
     )
-    await chat.send_message(f"📄 Stored *{doc.file_name}*.\n\n{summary}", parse_mode=ParseMode.MARKDOWN)
+    await safe_send(chat.send_message, f"📄 Stored **{doc.file_name}**.\n\n{summary}")
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await authorize(update, context):
+        return
+    if not await rate_limit(update, context):
+        return
+
+    msg = update.effective_message
+    if msg is None or not msg.photo:
+        return
+
+    chat = update.effective_chat
+    await chat.send_chat_action(ChatAction.UPLOAD_PHOTO)
+
+    photo = msg.photo[-1]  # highest resolution
+    file = await photo.get_file()
+    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+    path = settings.uploads_dir / f"photo_{msg.message_id}.jpg"
+    await file.download_to_drive(path)
+
+    description = ""
+    try:
+        llm = context.application.bot_data["llm"]
+        description = await llm.describe_image(path, prompt=msg.caption or "Describe this image briefly.")
+    except Exception as exc:
+        logger.warning("Image description failed: %s", exc)
+
+    memory = context.application.bot_data["memory"]
+    user_id_db = context.application.bot_data["user_id_db"]
+
+    from src.memory.db import session_scope
+    from src.memory.structured import StructuredStore
+
+    with session_scope() as s:
+        StructuredStore(s).add_file(
+            user_id=user_id_db,
+            filename=path.name,
+            file_type="image/jpeg",
+            telegram_file_id=photo.file_id,
+            extracted_text=description[:50000] if description else None,
+            summary=description[:500] if description else None,
+        )
+
+    if description:
+        try:
+            memory.semantic.add(
+                collection="documents",
+                text=description,
+                metadata={"user_id": user_id_db, "filename": path.name, "category": "image"},
+            )
+        except Exception:
+            pass
+
+    body = description or "(no description generated)"
+    await safe_send(chat.send_message, f"🖼 Saved photo.\n\n{body[:1500]}")
+
+
+def _forwarded_origin(msg) -> Optional[str]:
+    fwd = getattr(msg, "forward_origin", None)
+    if fwd is None:
+        return None
+    name = getattr(fwd, "sender_user_name", None) or getattr(fwd, "sender_chat", None)
+    if hasattr(fwd, "sender_user") and getattr(fwd.sender_user, "full_name", None):
+        return fwd.sender_user.full_name
+    if hasattr(fwd, "chat") and getattr(fwd.chat, "title", None):
+        return fwd.chat.title
+    return str(name) if name else "unknown"
 
 
 def _extract_text(path: Path) -> str:

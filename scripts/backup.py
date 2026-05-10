@@ -97,9 +97,51 @@ def run_backup() -> Path:
         if settings.uploads_dir.exists():
             tar.add(settings.uploads_dir, arcname="uploads")
 
+        # Encrypted copy of the .env so a fresh recovery has the secrets too.
+        # Skipped silently if no passphrase is configured.
+        env_blob = _build_encrypted_env_blob()
+        if env_blob is not None:
+            info = tarfile.TarInfo("env.enc")
+            info.size = len(env_blob)
+            info.mtime = int(datetime.utcnow().timestamp())
+            tar.addfile(info, io.BytesIO(env_blob))
+            logger.info("backup includes encrypted .env (AES-GCM)")
+
     _prune_old_backups()
     _push_offsite(archive)
     return archive
+
+
+def _build_encrypted_env_blob() -> bytes | None:
+    """Encrypt the running container's .env file with AES-GCM keyed off
+    BACKUP_ENV_PASSPHRASE (scrypt-derived). Returns None if no passphrase
+    is set or the .env can't be located.
+
+    Output bytes layout: ``b"OMNIMEENV1" || salt(16) || nonce(12) || ciphertext``
+    so the restore script can read it without a separate manifest.
+    """
+    passphrase = settings.backup_env_passphrase
+    if not passphrase:
+        return None
+    env_path = Path("/app/.env") if Path("/app/.env").exists() else Path(".env")
+    if not env_path.exists():
+        logger.warning("BACKUP_ENV_PASSPHRASE set but .env not found at %s", env_path)
+        return None
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+        import os as _os
+    except ImportError:
+        logger.warning("cryptography missing; skipping .env encryption")
+        return None
+
+    plaintext = env_path.read_bytes()
+    salt = _os.urandom(16)
+    kdf = Scrypt(salt=salt, length=32, n=2**15, r=8, p=1)
+    key = kdf.derive(passphrase.encode("utf-8"))
+    nonce = _os.urandom(12)
+    ct = AESGCM(key).encrypt(nonce, plaintext, None)
+    return b"OMNIMEENV1" + salt + nonce + ct
 
 
 def _pg_dump() -> bytes | None:

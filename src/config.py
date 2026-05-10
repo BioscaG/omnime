@@ -118,6 +118,8 @@ class Settings(BaseSettings):
     backup_enabled: bool = Field(default=True, alias="BACKUP_ENABLED")
     backup_at: str = Field(default="03:00", alias="BACKUP_AT")
     backup_keep: int = Field(default=14, alias="BACKUP_KEEP")
+    backup_env_passphrase: str = Field(default="", alias="BACKUP_ENV_PASSPHRASE",
+        description="If set, the .env file is encrypted with AES-GCM (key = scrypt of this passphrase) and added to every backup. KEEP THIS PASSPHRASE OFFLINE — without it, encrypted .env can't be recovered.")
     # Off-site target. Pick ONE.
     #   none / s3 / b2 / scp / rclone
     backup_remote: str = Field(default="none", alias="BACKUP_REMOTE")

@@ -7,10 +7,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
+from typing import TYPE_CHECKING
+
 from src.brain.context_builder import Context, ContextBuilder
 from src.brain.llm_client import LLMClient, ToolDef
 from src.brain.prompts import build_system_prompt
-from src.memory.manager import MemoryManager
+
+if TYPE_CHECKING:
+    from src.memory.manager import MemoryManager
 
 
 logger = logging.getLogger(__name__)
@@ -99,7 +103,7 @@ class Orchestrator:
     def __init__(
         self,
         llm: LLMClient,
-        memory: MemoryManager,
+        memory: "MemoryManager",
         context_builder: Optional[ContextBuilder] = None,
         skill_registry: Any = None,
         evolution_engine: Any = None,

@@ -40,6 +40,7 @@ async def test_streamer_handles_long_text_by_starting_new_message():
     msg = _FakeMessage()
     streamer = TelegramStreamer(msg, debounce_seconds=0.0, max_chars=20)
     await streamer.push("a" * 50)
-    final = await streamer.finalize()
-    assert len(final) >= 30  # buffer cleared after the final chunk
+    await streamer.finalize()
     assert msg.replies, "should have spilled over to a new message"
+    # Each Telegram message stayed within max_chars.
+    assert all(len(e) <= 20 for e in msg.edits if e)

@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     )
     llm_fallback_model: Optional[str] = Field(default=None, alias="LLM_FALLBACK_MODEL")
 
+    @field_validator("llm_fallback_provider", "llm_fallback_model", mode="before")
+    @classmethod
+    def _empty_to_none(cls, v):
+        if v == "":
+            return None
+        return v
+
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
     ollama_model: str = Field(default="llama3", alias="OLLAMA_MODEL")

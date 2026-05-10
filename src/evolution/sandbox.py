@@ -65,7 +65,13 @@ SAFE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "PYTHONIOENCODING")
 
 
 def _safe_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k in SAFE_ENV_KEYS}
+    """Return a stripped env: only safe vars plus PYTHONPATH limited to the
+    project root so the candidate can do ``from src.skills.base import …``
+    without inheriting application secrets."""
+    env = {k: v for k, v in os.environ.items() if k in SAFE_ENV_KEYS}
+    project_root = str(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = project_root
+    return env
 
 
 class Sandbox:

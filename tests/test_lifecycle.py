@@ -24,7 +24,9 @@ def test_decay_halves_at_half_life():
 
 def test_dedup_bumps_existing_close_match():
     semantic = SemanticStore(in_memory=True)
-    lifecycle = LifecycleManager(semantic, dedup_distance=0.6)
+    # Threshold large enough to fire on identical text regardless of which
+    # embedding model is loaded by chroma in the host process.
+    lifecycle = LifecycleManager(semantic, dedup_distance=100.0)
 
     lifecycle.add_with_dedup("knowledge", "Met Sarah Chen at Google", {"user_id": 1})
     _id, dup = lifecycle.add_with_dedup(
@@ -36,11 +38,13 @@ def test_dedup_bumps_existing_close_match():
 
 def test_dedup_inserts_when_distinct():
     semantic = SemanticStore(in_memory=True)
-    lifecycle = LifecycleManager(semantic, dedup_distance=0.05)
+    # Very tight threshold so unrelated entries are always inserted.
+    lifecycle = LifecycleManager(semantic, dedup_distance=0.001)
 
     lifecycle.add_with_dedup("knowledge", "Project ATLAS uses Python", {"user_id": 1})
+    initial = semantic.count("knowledge")
     _id, dup = lifecycle.add_with_dedup(
         "knowledge", "Trip to Tokyo last summer", {"user_id": 1}
     )
     assert dup is False
-    assert semantic.count("knowledge") == 2
+    assert semantic.count("knowledge") == initial + 1

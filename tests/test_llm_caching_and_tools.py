@@ -24,14 +24,14 @@ def test_estimate_cost_returns_zero_for_unknown_model():
 
 
 def test_estimate_cost_honours_cache_pricing():
-    cost = LLMClient._estimate_cost(
-        "claude-sonnet-4-20250514", inp=1_000_000, out=0, cw=0, cr=1_000_000
+    """1M cache-read tokens should be markedly cheaper than 1M fresh-input tokens."""
+    cache_only = LLMClient._estimate_cost(
+        "claude-sonnet-4-20250514", inp=0, out=0, cw=0, cr=1_000_000
     )
-    # Cache reads should be markedly cheaper than fresh inputs.
-    fresh = LLMClient._estimate_cost(
+    fresh_only = LLMClient._estimate_cost(
         "claude-sonnet-4-20250514", inp=1_000_000, out=0, cw=0, cr=0
     )
-    assert cost < fresh
+    assert cache_only < fresh_only
 
 
 def test_tooldef_input_schema_passthrough():

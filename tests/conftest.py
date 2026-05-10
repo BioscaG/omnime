@@ -9,16 +9,26 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import JSON, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 
 import src.memory.db as db_module
 from src.memory.models import Base
 
 
-# Map JSONB → JSON when running on SQLite. Registered once per process.
-@JSONB.compile.dispatch.for_type(JSONB)  # type: ignore[attr-defined]
-def _jsonb_to_json(element, compiler, **kw):
-    return compiler.visit_JSON(JSON(), **kw)
+# Map JSONB → JSON when running on SQLite. The default JSONB compiler emits
+# ``JSONB`` which SQLite doesn't understand; here we shim it to ``JSON``.
+@compiles(JSONB, "sqlite")
+def _jsonb_to_sqlite_json(element, compiler, **kw):  # noqa: D401, ARG001
+    return "JSON"
+
+
+@pytest.fixture(autouse=True)
+def _disable_docker_sandbox(monkeypatch):
+    """Tests run the candidate in a stripped subprocess, never Docker."""
+    from src.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "evolution_use_docker", False)
 
 
 @pytest.fixture(autouse=True)
@@ -71,8 +81,9 @@ class FakeLLM:
             "prompt": prompt, "system": system, "tier": model_tier,
             "force_provider": force_provider,
         })
+        haystack = (prompt or "") + " " + (system or "")
         for key, value in self.responses.items():
-            if key.lower() in prompt.lower():
+            if key.lower() in haystack.lower():
                 return value
         return self.default
 

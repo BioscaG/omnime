@@ -1,32 +1,33 @@
-"""Orchestrator routing and intent classification."""
+"""Orchestrator routing and intent classification (legacy + tuple)."""
 from __future__ import annotations
 
 import json
 
 import pytest
 
+from src.brain.llm_client import ToolCall
 from src.brain.orchestrator import Intent, Orchestrator
 
 
 @pytest.mark.asyncio
 async def test_classify_intent_chat(fake_llm, memory_manager):
-    fake_llm.default = "CHAT"
+    fake_llm.tool_calls_to_return = [ToolCall(id="0", name="CHAT", input={})]
     orch = Orchestrator(llm=fake_llm, memory=memory_manager)
-    intent = await orch.classify_intent("How are you?")
+    intent, _meta = await orch.classify_intent("How are you?")
     assert intent == Intent.CHAT
 
 
 @pytest.mark.asyncio
 async def test_classify_intent_unknown_falls_back(fake_llm, memory_manager):
-    fake_llm.default = "GIBBERISH"
+    fake_llm.tool_calls_to_return = [ToolCall(id="0", name="MYSTERY", input={})]
     orch = Orchestrator(llm=fake_llm, memory=memory_manager)
-    intent = await orch.classify_intent("???")
+    intent, _meta = await orch.classify_intent("???")
     assert intent == Intent.CHAT
 
 
 @pytest.mark.asyncio
 async def test_process_message_store_path(fake_llm, memory_manager):
-    fake_llm.responses["one word only"] = "STORE"
+    fake_llm.tool_calls_to_return = [ToolCall(id="0", name="STORE", input={})]
     fake_llm.responses["return only valid json"] = json.dumps({
         "projects": [{"name": "Demo project"}],
         "work_experience": [], "education": [], "skills": [],
@@ -42,7 +43,7 @@ async def test_process_message_store_path(fake_llm, memory_manager):
 
 @pytest.mark.asyncio
 async def test_process_message_chat_path(fake_llm, memory_manager):
-    fake_llm.responses["one word only"] = "CHAT"
+    fake_llm.tool_calls_to_return = [ToolCall(id="0", name="CHAT", input={})]
     fake_llm.default = "Sure, happy to chat."
     user_id = memory_manager.ensure_user(telegram_id=11)
     orch = Orchestrator(llm=fake_llm, memory=memory_manager)

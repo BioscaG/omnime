@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
+from sqlalchemy import select
+
 from src.brain.llm_client import LLMClient
+from src.memory import models as m
 from src.memory.db import session_scope
 from src.memory.extractor import EntityExtractor, Extraction
+from src.memory.lifecycle import LifecycleManager, importance_score
 from src.memory.semantic import SemanticHit, SemanticStore
 from src.memory.structured import StructuredStore
 from src.memory.summarizer import Summarizer
@@ -21,6 +25,7 @@ logger = logging.getLogger(__name__)
 class StoreResult:
     extraction: Extraction
     stored_summary: str
+    deduplicated: int = 0
 
 
 class MemoryManager:
@@ -33,6 +38,7 @@ class MemoryManager:
         self.semantic = semantic or SemanticStore()
         self.extractor = EntityExtractor(llm)
         self.summarizer = Summarizer(llm)
+        self.lifecycle = LifecycleManager(self.semantic)
 
     # --- User -----------------------------------------------------------
     def ensure_user(self, telegram_id: int, name: str | None = None) -> int:
@@ -44,8 +50,6 @@ class MemoryManager:
     def get_user_profile(self, user_id: int) -> dict[str, Any]:
         with session_scope() as s:
             store = StructuredStore(s)
-            from src.memory import models as m
-
             user = s.get(m.UserProfile, user_id)
             if not user:
                 return {}
@@ -65,6 +69,7 @@ class MemoryManager:
                         "role": p.role,
                         "description": p.description,
                         "technologies": p.technologies,
+                        "importance": p.importance,
                     }
                     for p in store.list_projects(user_id)
                 ],
@@ -87,10 +92,19 @@ class MemoryManager:
                     for e in store.list_education(user_id)
                 ],
                 "skills": [
-                    {"name": s.name, "proficiency": s.proficiency, "category": s.category}
-                    for s in store.list_skills(user_id)
+                    {"name": sk.name, "proficiency": sk.proficiency, "category": sk.category}
+                    for sk in store.list_skills(user_id)
                 ],
                 "contacts_count": len(store.list_contacts(user_id)),
+                "active_goals": [
+                    {
+                        "id": g.id,
+                        "description": g.description,
+                        "streak": g.streak,
+                        "cadence": g.cadence,
+                    }
+                    for g in store.list_goals(user_id, status="active")
+                ],
             }
 
     # --- Storage --------------------------------------------------------
@@ -134,19 +148,25 @@ class MemoryManager:
                 if fields:
                     store.update_user(user_id, **fields)
 
-        # Semantic indexing — store the raw message + structured highlights
-        self.semantic.add(
-            collection="conversations",
-            text=message,
-            metadata={
-                "user_id": user_id,
-                "date": datetime.utcnow().isoformat(),
-                "source": "conversation",
-            },
-        )
+        deduplicated = 0
+        try:
+            _, dup = self.lifecycle.add_with_dedup(
+                collection="conversations",
+                text=message,
+                metadata={
+                    "user_id": user_id,
+                    "date": datetime.utcnow().isoformat(),
+                    "source": "conversation",
+                    "importance": importance_score(message),
+                },
+            )
+            deduplicated += int(dup)
+        except Exception as exc:
+            logger.warning("Conversation indexing failed: %s", exc)
+
         for proj in extraction.projects:
             if proj.get("name"):
-                self.semantic.add(
+                _, dup = self.lifecycle.add_with_dedup(
                     collection="knowledge",
                     text=f"Project '{proj['name']}': {proj.get('description') or ''} "
                     f"Tech: {', '.join(proj.get('technologies') or [])}",
@@ -154,31 +174,62 @@ class MemoryManager:
                         "user_id": user_id,
                         "category": "project",
                         "name": proj["name"],
+                        "importance": importance_score(
+                            proj.get("description") or "", {"category": "project"}
+                        ),
                     },
                 )
+                deduplicated += int(dup)
         for ach in extraction.achievements:
             if ach.get("title"):
-                self.semantic.add(
+                _, dup = self.lifecycle.add_with_dedup(
                     collection="knowledge",
                     text=f"Achievement: {ach['title']}. {ach.get('description') or ''}",
-                    metadata={"user_id": user_id, "category": "achievement"},
+                    metadata={
+                        "user_id": user_id, "category": "achievement",
+                        "importance": importance_score(
+                            ach.get("description") or "", {"category": "achievement"}
+                        ),
+                    },
                 )
+                deduplicated += int(dup)
         for ev in extraction.life_events:
             if ev.get("title"):
-                self.semantic.add(
+                _, dup = self.lifecycle.add_with_dedup(
                     collection="knowledge",
                     text=f"Life event: {ev['title']}. {ev.get('description') or ''}",
-                    metadata={"user_id": user_id, "category": "life_event"},
+                    metadata={
+                        "user_id": user_id, "category": "life_event",
+                        "importance": importance_score(
+                            ev.get("description") or "", {"category": "life_event"}
+                        ),
+                    },
                 )
+                deduplicated += int(dup)
         for idea in extraction.ideas:
             if idea.get("content"):
-                self.semantic.add(
+                _, dup = self.lifecycle.add_with_dedup(
                     collection="knowledge",
                     text=f"Idea: {idea['content']}",
-                    metadata={"user_id": user_id, "category": "idea"},
+                    metadata={
+                        "user_id": user_id, "category": "idea",
+                        "importance": importance_score(
+                            idea.get("content") or "", {"category": "idea"}
+                        ),
+                    },
                 )
+                deduplicated += int(dup)
 
-        return StoreResult(extraction=extraction, stored_summary=extraction.summary())
+        try:
+            self._maybe_register_goal_check_in(user_id, message)
+        except Exception as exc:
+            logger.warning("Goal check-in detection failed: %s", exc)
+
+        return StoreResult(
+            extraction=extraction,
+            stored_summary=extraction.summary(),
+            deduplicated=deduplicated,
+        )
 
     # --- Retrieval ------------------------------------------------------
     def semantic_search(
@@ -200,7 +251,12 @@ class MemoryManager:
                 )
             except Exception as exc:
                 logger.warning("Semantic search error in %s: %s", collection, exc)
-        hits.sort(key=lambda h: h.distance)
+
+        def _score(h: SemanticHit) -> float:
+            imp = float(h.metadata.get("importance", 0.5))
+            return h.distance - 0.05 * imp
+
+        hits.sort(key=_score)
         return hits[:n_results]
 
     def log_message(
@@ -234,3 +290,119 @@ class MemoryManager:
                 }
                 for r in rows
             ]
+
+    # --- Forget / audit -------------------------------------------------
+    def forget(self, user_id: int, selector: str) -> str:
+        sel = selector.strip()
+        if not sel:
+            return "Empty selector."
+        if " " not in sel:
+            return "Usage: /forget <type> <name>. Type ∈ project, contact, skill, idea, goal, memory."
+        kind, _, query = sel.partition(" ")
+        kind = kind.lower()
+        query = query.strip()
+        with session_scope() as s:
+            store = StructuredStore(s)
+            if kind == "project":
+                rows = list(s.scalars(
+                    select(m.Project).where(m.Project.user_id == user_id, m.Project.name.ilike(query))
+                ))
+                deleted = self._delete_rows(s, rows, user_id, "project")
+            elif kind == "contact":
+                rows = list(s.scalars(
+                    select(m.Contact).where(m.Contact.user_id == user_id, m.Contact.name.ilike(query))
+                ))
+                deleted = self._delete_rows(s, rows, user_id, "contact")
+            elif kind == "skill":
+                rows = list(s.scalars(
+                    select(m.Skill).where(m.Skill.user_id == user_id, m.Skill.name.ilike(query))
+                ))
+                deleted = self._delete_rows(s, rows, user_id, "skill")
+            elif kind == "idea":
+                rows = list(s.scalars(
+                    select(m.Idea).where(m.Idea.user_id == user_id, m.Idea.content.ilike(f"%{query}%"))
+                ))
+                deleted = self._delete_rows(s, rows, user_id, "idea")
+            elif kind == "goal":
+                rows = list(s.scalars(
+                    select(m.Goal).where(m.Goal.user_id == user_id, m.Goal.description.ilike(f"%{query}%"))
+                ))
+                deleted = self._delete_rows(s, rows, user_id, "goal")
+            elif kind == "memory":
+                self.semantic.delete("knowledge", query)
+                self.semantic.delete("conversations", query)
+                store.add_audit(user_id, "forget_memory", "memory", None, {"selector": query})
+                return f"Forgot semantic entries matching id {query}."
+            else:
+                return f"Unknown selector type: {kind}"
+
+        if not deleted:
+            return f"No {kind} matched '{query}'."
+        return f"Forgot {len(deleted)} {kind}(s): {', '.join(deleted)}"
+
+    @staticmethod
+    def _delete_rows(session, rows, user_id: int, entity_type: str) -> list[str]:
+        deleted: list[str] = []
+        for row in rows:
+            label = getattr(row, "name", None) or getattr(row, "description", None) or str(row.id)
+            session.add(
+                m.AuditLog(
+                    user_id=user_id,
+                    action="forget",
+                    entity_type=entity_type,
+                    entity_id=row.id,
+                    details={"label": label},
+                )
+            )
+            session.delete(row)
+            deleted.append(label)
+        return deleted
+
+    # --- Goals ----------------------------------------------------------
+    def add_goal(self, user_id: int, description: str) -> dict[str, Any]:
+        cadence = self._parse_cadence(description)
+        with session_scope() as s:
+            store = StructuredStore(s)
+            g = store.add_goal(user_id=user_id, description=description, cadence=cadence)
+            store.add_audit(user_id, "create", "goal", g.id, {"description": description})
+            return {
+                "id": g.id,
+                "description": g.description,
+                "streak": g.streak,
+                "cadence": g.cadence,
+            }
+
+    def _maybe_register_goal_check_in(self, user_id: int, message: str) -> None:
+        text = message.lower()
+        with session_scope() as s:
+            store = StructuredStore(s)
+            today = date.today()
+            for goal in store.list_goals(user_id, status="active"):
+                key_terms = [w for w in goal.description.lower().split() if len(w) > 3]
+                if not key_terms:
+                    continue
+                if all(term in text for term in key_terms[:2]):
+                    if goal.last_check_in == today:
+                        continue
+                    if goal.last_check_in and (today - goal.last_check_in).days <= 1:
+                        goal.streak = (goal.streak or 0) + 1
+                    else:
+                        goal.streak = 1
+                    goal.longest_streak = max(goal.longest_streak or 0, goal.streak)
+                    goal.last_check_in = today
+                    store.add_audit(user_id, "check_in", "goal", goal.id, {"streak": goal.streak})
+
+    @staticmethod
+    def _parse_cadence(description: str) -> str | None:
+        d = description.lower()
+        if "daily" in d or "every day" in d:
+            return "daily"
+        if "weekly" in d or "every week" in d:
+            return "weekly"
+        if "month" in d:
+            return "monthly"
+        return None
+
+    # --- Maintenance hook ----------------------------------------------
+    def run_maintenance(self, user_id: int) -> dict[str, int]:
+        return self.lifecycle.run_maintenance(user_id)

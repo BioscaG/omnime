@@ -83,10 +83,12 @@ class EvolutionEngine:
         memory: "MemoryManager",
         registry: "SkillRegistry",
     ) -> None:
+        from src.config import settings as _settings
+
         self.llm = llm
         self.memory = memory
         self.registry = registry
-        self.sandbox = Sandbox()
+        self.sandbox = Sandbox(use_docker=_settings.evolution_use_docker)
         self.deployer = Deployer(registry)
         self._pending: dict[int, PendingSkill] = {}
 

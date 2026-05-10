@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.memory.manager import MemoryManager
+if TYPE_CHECKING:
+    from src.memory.manager import MemoryManager
 
 
 @dataclass
@@ -43,7 +44,7 @@ class Context:
 
 
 class ContextBuilder:
-    def __init__(self, memory: MemoryManager) -> None:
+    def __init__(self, memory: "MemoryManager") -> None:
         self.memory = memory
 
     async def build(

@@ -243,10 +243,12 @@ class StructuredStore:
         return conv
 
     def recent_messages(self, user_id: int, limit: int = 10) -> list[m.Conversation]:
+        # Order by id (monotonic) rather than created_at to keep the ordering
+        # stable when multiple messages land in the same second.
         stmt = (
             select(m.Conversation)
             .where(m.Conversation.user_id == user_id)
-            .order_by(m.Conversation.created_at.desc())
+            .order_by(m.Conversation.id.desc())
             .limit(limit)
         )
         rows = list(self.session.scalars(stmt))

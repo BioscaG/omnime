@@ -256,23 +256,30 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as exc:
             logger.warning("Document chunk %d indexing failed: %s", i, exc)
 
-    # 4. If the document is about the user, run the entity extractor over it.
+    # 4. Run the entity extractor over any document with substantial text.
+    # The analyzer's `should_extract_personal` flag was too conservative —
+    # dropping facts from contracts, invoices, papers etc. The extractor's
+    # own dedup logic handles spam-prevention; cost is bounded by the
+    # 8000-char cap.
     extraction_summary = ""
-    if analysis.should_extract_personal:
+    if extracted and len(extracted) > 200:
         try:
             result = await memory.process_and_store(
                 user_id=user_id_db,
-                message=extracted[:8000],  # cap to keep extractor cost predictable
-                context_hint=f"This text comes from an uploaded document classified as '{analysis.category}'.",
+                message=extracted[:8000],
+                context_hint=(
+                    f"This text comes from an uploaded document classified "
+                    f"as '{analysis.category}', titled '{analysis.title or doc.file_name}'."
+                ),
             )
             extraction_summary = result.stored_summary
         except Exception as exc:
-            logger.warning("Personal extraction from document failed: %s", exc)
+            logger.warning("Document entity extraction failed: %s", exc)
 
     # 5. Reply with a structured receipt.
     bullets: list[str] = []
     bullets.append(f"📄 **{analysis.title or doc.file_name}**")
-    bullets.append(f"Type: `{analysis.category}` · {len(chunks)} chunk(s) indexed")
+    bullets.append(f"Type: `{analysis.category}` · {len(chunks)} chunk(s) indexed · saved to files")
     if analysis.tags:
         bullets.append(f"Tags: {', '.join(analysis.tags)}")
     if analysis.summary:
@@ -280,7 +287,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if analysis.key_entities:
         bullets.append(f"\n_Mentioned: {', '.join(analysis.key_entities[:6])}_")
     if extraction_summary and extraction_summary != "nothing new":
-        bullets.append(f"\n✅ Extracted into your profile: {extraction_summary}")
+        bullets.append(f"\n💾 Saved to memory: {extraction_summary}")
+    bullets.append("\n_Ask me anything about it later — I can search across your files._")
 
     await safe_send(chat.send_message, "\n".join(bullets))
 

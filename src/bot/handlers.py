@@ -111,25 +111,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         telegram_message_id=msg.message_id,
     )
 
-    # Send a placeholder so we can stream into it for chat/query intents.
-    placeholder = await chat.send_message("…")
+    placeholder = None
+    if settings.enable_streaming:
+        # Send a placeholder so the orchestrator can stream into it.
+        placeholder = await chat.send_message("…")
 
     response = await orchestrator.process_message(
         user_id=user_id_db, message=incoming, stream_message=placeholder,
     )
 
-    # If the orchestrator never streamed (STORE / TASK / EVOLVE), the
-    # placeholder is still empty — replace it; otherwise leave the streamed text.
-    if response.intent and response.intent.value not in ("CHAT", "QUERY"):
-        try:
-            await placeholder.delete()
-        except Exception:
-            pass
-        await _send_response(update, response)
-    else:
-        # Send any inline buttons / files the streamed response carried.
+    streamed_into_placeholder = (
+        placeholder is not None
+        and response.intent
+        and response.intent.value in ("CHAT", "QUERY")
+    )
+    if streamed_into_placeholder:
+        # Streamer already wrote into the placeholder; only send the extras.
         if response.inline_buttons or response.files:
             await _send_extras(chat, response)
+    else:
+        if placeholder is not None:
+            try:
+                await placeholder.delete()
+            except Exception:
+                pass
+        await _send_response(update, response)
 
     memory.log_message(
         user_id=user_id_db,

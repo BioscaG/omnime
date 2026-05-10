@@ -24,6 +24,49 @@ _whisper_model = None
 _whisper_lock = asyncio.Lock()
 
 
+# In-memory upload session tracker. When the user uploads multiple files
+# within UPLOAD_SESSION_GAP seconds of each other, they all land in the
+# same session folder under data/uploads/<session>/. After the gap, a new
+# session folder is created.
+_UPLOAD_SESSIONS: dict[int, tuple[Path, float]] = {}
+UPLOAD_SESSION_GAP = 5 * 60  # 5 minutes
+
+
+def _slugify_for_dir(text: str) -> str:
+    import re as _re
+    s = _re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:30] or "upload"
+
+
+def _get_or_create_session_dir(user_id: int, hint_filename: str = "") -> Path:
+    """Group uploads from the same user within UPLOAD_SESSION_GAP into
+    a single subfolder of data/uploads/. Folder name: YYYY-MM-DD_HH-MM_<slug>."""
+    import time as _time
+
+    now = _time.time()
+    cached = _UPLOAD_SESSIONS.get(user_id)
+    if cached:
+        path, last_at = cached
+        if now - last_at < UPLOAD_SESSION_GAP and path.exists():
+            _UPLOAD_SESSIONS[user_id] = (path, now)
+            return path
+
+    from datetime import datetime as _dt
+
+    stamp = _dt.utcnow().strftime("%Y-%m-%d_%H-%M")
+    slug = _slugify_for_dir(Path(hint_filename).stem)
+    folder_name = f"{stamp}_{slug}" if slug else stamp
+    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+    path = settings.uploads_dir / folder_name
+    i = 2
+    while path.exists():
+        path = settings.uploads_dir / f"{folder_name}_{i}"
+        i += 1
+    path.mkdir(parents=True, exist_ok=True)
+    _UPLOAD_SESSIONS[user_id] = (path, now)
+    return path
+
+
 async def _get_whisper_model():
     """Lazy-load faster-whisper. Model downloaded on first use (~150MB,
     cached under ~/.cache/huggingface). Runs on CPU; ~2-5s for a 30s
@@ -235,9 +278,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     file = await doc.get_file()
-    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-    path = settings.uploads_dir / (doc.file_name or f"doc_{msg.message_id}")
+    session_dir = _get_or_create_session_dir(user_id_db, doc.file_name or "")
+    raw_name = doc.file_name or f"doc_{msg.message_id}"
+    path = session_dir / raw_name
+    # If a same-named file already lives in this session (rare — Telegram
+    # would have deduped via file_id earlier), append a numeric suffix.
+    j = 2
+    while path.exists():
+        stem = Path(raw_name).stem
+        ext = Path(raw_name).suffix
+        path = session_dir / f"{stem}_{j}{ext}"
+        j += 1
     await file.download_to_drive(path)
+    # Compute the path relative to data/uploads/ — this is what we store in
+    # FileRecord.filename so the rest of the codebase resolves it correctly.
+    rel_name = str(path.relative_to(settings.uploads_dir))
 
     # Zip / archive uploads → extract to a subdirectory and register as a
     # 'folder' FileRecord. The agent then sends the whole tree to
@@ -246,11 +301,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         import shutil as _shutil
 
         folder_name = path.stem  # e.g. "tfg" from "tfg.zip"
-        folder_path = settings.uploads_dir / folder_name
-        # Make folder name unique if it exists.
+        folder_path = session_dir / folder_name
         i = 2
         while folder_path.exists():
-            folder_path = settings.uploads_dir / f"{folder_name}_{i}"
+            folder_path = session_dir / f"{folder_name}_{i}"
             i += 1
         try:
             _shutil.unpack_archive(str(path), extract_dir=str(folder_path))
@@ -272,11 +326,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"{total_files} files, {total_size // 1024} KB total. "
             f"First entries: {', '.join(entries[:10])}"
         )
+        rel_folder = str(folder_path.relative_to(settings.uploads_dir))
         with session_scope() as s:
             from src.memory.structured import StructuredStore
             stored = StructuredStore(s).add_file(
                 user_id=user_id_db,
-                filename=folder_name,
+                filename=rel_folder,
                 file_type="folder",
                 telegram_file_id=doc.file_id,
                 extracted_text=None,
@@ -320,7 +375,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     with session_scope() as s:
         StructuredStore(s).add_file(
             user_id=user_id_db,
-            filename=doc.file_name,
+            filename=rel_name,
             file_type=doc.mime_type,
             telegram_file_id=doc.file_id,
             extracted_text=extracted[:50000],
@@ -343,7 +398,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 text=chunk_text_value,
                 metadata={
                     "user_id": user_id_db,
-                    "filename": doc.file_name or "unknown",
+                    "filename": rel_name,
                     "category": analysis.category,
                     "chunk": i,
                     "of": len(chunks),
@@ -404,9 +459,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     photo = msg.photo[-1]  # highest resolution
     file = await photo.get_file()
-    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-    path = settings.uploads_dir / f"photo_{msg.message_id}.jpg"
+    user_id_db = context.application.bot_data["user_id_db"]
+    session_dir = _get_or_create_session_dir(user_id_db, "photo")
+    path = session_dir / f"photo_{msg.message_id}.jpg"
     await file.download_to_drive(path)
+    rel_name = str(path.relative_to(settings.uploads_dir))
 
     description = ""
     try:
@@ -427,7 +484,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.warning("Image description failed: %s", exc)
 
     memory = context.application.bot_data["memory"]
-    user_id_db = context.application.bot_data["user_id_db"]
 
     from src.memory.db import session_scope
     from src.memory.structured import StructuredStore
@@ -447,7 +503,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     with session_scope() as s:
         StructuredStore(s).add_file(
             user_id=user_id_db,
-            filename=path.name,
+            filename=rel_name,
             file_type="image/jpeg",
             telegram_file_id=photo.file_id,
             extracted_text=description[:50000] if description else None,
@@ -460,7 +516,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             memory.semantic.add(
                 collection="documents",
                 text=description,
-                metadata={"user_id": user_id_db, "filename": path.name, "category": category},
+                metadata={"user_id": user_id_db, "filename": rel_name, "category": category},
             )
         except Exception:
             pass

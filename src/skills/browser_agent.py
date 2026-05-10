@@ -461,7 +461,7 @@ class BrowserAgentSkill(BaseSkill):
         data = self._parse_json(raw)
         if not data:
             return AgentStep(action="ask_user", reasoning="Couldn't decide next step",
-                              user_message="Algo salió raro al razonar. ¿Sigo, o cancelamos?")
+                              user_message="Something went sideways while reasoning. Continue or cancel?")
 
         sel = data.get("selector")
         sel_type = data.get("selector_type")

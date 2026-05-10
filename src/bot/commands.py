@@ -273,7 +273,7 @@ async def cmd_browse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await safe_send(
             update.effective_message.reply_text,
             "Usage: /browse <goal>\n"
-            "Example: /browse busca tren Madrid-Barcelona mañana 12:00 en renfe.com",
+            "Example: /browse find a Madrid-Barcelona train tomorrow at 12:00 on renfe.com",
         )
         return
     goal = " ".join(context.args)

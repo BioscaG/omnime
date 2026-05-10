@@ -66,16 +66,16 @@ class WebFetchSkill(BaseSkill):
     async def execute(self, message: str, context: "Context") -> SkillResponse:
         url = self._extract_url(message)
         if not url:
-            return SkillResponse(text="Pásame una URL pública (https://...).")
+            return SkillResponse(text="Pass me a public URL (https://...).")
 
         try:
             html = await self._fetch(url)
         except Exception as exc:
-            return SkillResponse(text=f"No pude descargar {url}: {exc}")
+            return SkillResponse(text=f"Couldn't download {url}: {exc}")
 
         text = self._extract_text(html)
         if not text.strip():
-            return SkillResponse(text=f"La página no devolvió texto utilizable: {url}")
+            return SkillResponse(text=f"Page returned no usable text: {url}")
 
         # Classify + summarise.
         analyzer = DocumentAnalyzer(self.llm)

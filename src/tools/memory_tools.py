@@ -248,6 +248,56 @@ MEMORY_REMIND = Tool(
 )
 
 
+async def _memory_forget(args: dict, context: "Context") -> str:
+    """Delete a structured entity from long-term memory. Audit-logged.
+    Wraps MemoryManager.forget which handles project/contact/skill/idea/
+    goal/memory."""
+    kind = (args.get("kind") or "").strip().lower()
+    name = (args.get("name") or "").strip()
+    if kind not in ("project", "contact", "skill", "idea", "goal", "memory"):
+        return json.dumps({
+            "error": f"kind must be one of project/contact/skill/idea/goal/memory, got {kind!r}"
+        })
+    if not name:
+        return json.dumps({"error": "name is required"})
+    user_id = int(getattr(context, "user_id", 0) or 0)
+    try:
+        result = _memory(context).forget(user_id, f"{kind} {name}")
+        return json.dumps({"status": "done", "result": result}, ensure_ascii=False)
+    except Exception as exc:
+        logger.warning("memory_forget failed: %s", exc)
+        return json.dumps({"error": str(exc)})
+
+
+MEMORY_FORGET = Tool(
+    name="memory_forget",
+    description=(
+        "Delete a structured entity from long-term memory by type + name. "
+        "Audit-logged. ONLY call when the user EXPLICITLY asks to delete / "
+        "forget / remove ('elimina', 'borra', 'olvida'). Never as a side "
+        "effect. The 'name' is matched case-insensitively (SQL ILIKE), so "
+        "'SVD' matches 'SVD Compression of BERT'. Run memory_search or "
+        "memory_recall_profile first to confirm the exact entity if "
+        "unsure."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["project", "contact", "skill", "idea", "goal", "memory"],
+            },
+            "name": {
+                "type": "string",
+                "description": "Entity name (substring match for ideas/goals/memory; ilike for project/contact/skill).",
+            },
+        },
+        "required": ["kind", "name"],
+    },
+    run=_memory_forget,
+)
+
+
 async def _memory_list_reminders(args: dict, context: "Context") -> str:
     user_id = int(getattr(context, "user_id", 0) or 0)
     only_pending = bool(args.get("only_pending", True))
@@ -351,4 +401,5 @@ def build_memory_tools() -> list[Tool]:
         MEMORY_REMIND,
         MEMORY_LIST_REMINDERS,
         MEMORY_CANCEL_REMINDER,
+        MEMORY_FORGET,
     ]

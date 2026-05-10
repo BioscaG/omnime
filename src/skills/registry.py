@@ -96,6 +96,15 @@ def _register_default_skills(registry: SkillRegistry) -> None:
     from src.skills.daily_briefing import DailyBriefingSkill
     from src.skills.code_generator import CodeGeneratorSkill
     from src.skills.weekly_review import WeeklyReviewSkill
+    from src.skills.career_onboarding import CareerOnboardingSkill
+    from src.skills.interview_prep import InterviewPrepSkill
+    from src.skills.job_tracker import JobTrackerSkill
+    from src.skills.cv_variants import CVVariantsSkill, SkillGapSkill
+    from src.skills.knowledge_graph import KnowledgeGraphSkill
+    from src.skills.reading_list import ReadingListSkill
+    from src.skills.decision_log import DecisionLogSkill
+    from src.skills.journaling import JournalingSkill
+    from src.skills.time_machine import TimeMachineSkill
 
     for cls in (
         CVGeneratorSkill,
@@ -105,6 +114,16 @@ def _register_default_skills(registry: SkillRegistry) -> None:
         DailyBriefingSkill,
         CodeGeneratorSkill,
         WeeklyReviewSkill,
+        CareerOnboardingSkill,
+        InterviewPrepSkill,
+        JobTrackerSkill,
+        CVVariantsSkill,
+        SkillGapSkill,
+        KnowledgeGraphSkill,
+        ReadingListSkill,
+        DecisionLogSkill,
+        JournalingSkill,
+        TimeMachineSkill,
     ):
         try:
             registry.register(cls(registry.llm, registry.memory))

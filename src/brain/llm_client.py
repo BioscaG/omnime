@@ -606,7 +606,7 @@ class LLMClient:
         }
         if self._supports_temperature(model):
             kwargs["temperature"] = temperature
-        sys_blocks = self._system_blocks(system, cache=True)
+        sys_blocks = self._system_blocks(system, cache_system=True)
         if sys_blocks:
             kwargs["system"] = sys_blocks
 

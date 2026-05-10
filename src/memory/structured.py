@@ -275,3 +275,82 @@ class StructuredStore:
         self.session.add(s)
         self.session.flush()
         return s
+
+    # --- Audit -----------------------------------------------------------
+    def add_audit(
+        self,
+        user_id: int,
+        action: str,
+        entity_type: str | None = None,
+        entity_id: int | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> m.AuditLog:
+        entry = m.AuditLog(
+            user_id=user_id,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            details=details,
+        )
+        self.session.add(entry)
+        self.session.flush()
+        return entry
+
+    def list_audit(self, user_id: int, limit: int = 50) -> list[m.AuditLog]:
+        stmt = (
+            select(m.AuditLog)
+            .where(m.AuditLog.user_id == user_id)
+            .order_by(m.AuditLog.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt))
+
+    # --- Goals -----------------------------------------------------------
+    def add_goal(
+        self,
+        user_id: int,
+        description: str,
+        cadence: str | None = None,
+    ) -> m.Goal:
+        g = m.Goal(user_id=user_id, description=description, cadence=cadence)
+        self.session.add(g)
+        self.session.flush()
+        return g
+
+    def list_goals(self, user_id: int, status: str | None = None) -> list[m.Goal]:
+        stmt = select(m.Goal).where(m.Goal.user_id == user_id)
+        if status:
+            stmt = stmt.where(m.Goal.status == status)
+        return list(self.session.scalars(stmt.order_by(m.Goal.created_at.desc())))
+
+    # --- Weekly reviews --------------------------------------------------
+    def add_weekly_review(
+        self,
+        user_id: int,
+        week_start: date,
+        wins: list[str] | None = None,
+        stuck: list[str] | None = None,
+        goals_next_week: list[str] | None = None,
+        reflection: str | None = None,
+        mood: float | None = None,
+    ) -> m.WeeklyReview:
+        wr = m.WeeklyReview(
+            user_id=user_id,
+            week_start=week_start,
+            wins=wins,
+            stuck=stuck,
+            goals_next_week=goals_next_week,
+            reflection=reflection,
+            mood=mood,
+        )
+        self.session.add(wr)
+        self.session.flush()
+        return wr
+
+    def latest_weekly_review(self, user_id: int) -> m.WeeklyReview | None:
+        return self.session.scalar(
+            select(m.WeeklyReview)
+            .where(m.WeeklyReview.user_id == user_id)
+            .order_by(m.WeeklyReview.created_at.desc())
+            .limit(1)
+        )

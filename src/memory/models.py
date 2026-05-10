@@ -68,6 +68,8 @@ class Project(Base):
     collaborators: Mapped[Optional[list[str]]] = mapped_column(JSONB)
     links: Mapped[Optional[list[str]]] = mapped_column(JSONB)
     details: Mapped[Optional[str]] = mapped_column(Text)
+    importance: Mapped[float] = mapped_column(Float, default=0.5)
+    last_referenced_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -210,6 +212,8 @@ class Idea(Base):
     tags: Mapped[Optional[list[str]]] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(50), default="raw")
     related_project_id: Mapped[Optional[int]] = mapped_column(ForeignKey("projects.id"))
+    importance: Mapped[float] = mapped_column(Float, default=0.5)
+    last_referenced_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -217,6 +221,50 @@ class Idea(Base):
     )
 
     user: Mapped["UserProfile"] = relationship(back_populates="ideas")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    entity_type: Mapped[Optional[str]] = mapped_column(String(100))
+    entity_id: Mapped[Optional[int]] = mapped_column(Integer)
+    details: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Goal(Base):
+    __tablename__ = "goals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    cadence: Mapped[Optional[str]] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(50), default="active")
+    streak: Mapped[int] = mapped_column(Integer, default=0)
+    longest_streak: Mapped[int] = mapped_column(Integer, default=0)
+    last_check_in: Mapped[Optional[date]] = mapped_column(Date)
+    extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WeeklyReview(Base):
+    __tablename__ = "weekly_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    wins: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    stuck: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    goals_next_week: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    reflection: Mapped[Optional[str]] = mapped_column(Text)
+    mood: Mapped[Optional[float]] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Conversation(Base):

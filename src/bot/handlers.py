@@ -41,10 +41,19 @@ BATCH_DEBOUNCE_SECONDS = 6.0
 def _enqueue_batch_entry(user_id: int, chat, entry: dict) -> None:
     """Append one upload to the user's pending burst. Schedules (or
     reschedules) the debounce task that flushes a consolidated receipt
-    when the user stops uploading for BATCH_DEBOUNCE_SECONDS."""
-    buf = _BATCH_BUFFER.setdefault(user_id, {"chat": chat, "entries": [], "task": None})
+    when the user stops uploading for BATCH_DEBOUNCE_SECONDS. If the
+    upload carried a caption (user's intent typed alongside the file),
+    accumulates it for the post-flush dispatch."""
+    buf = _BATCH_BUFFER.setdefault(
+        user_id,
+        {"chat": chat, "entries": [], "task": None, "captions": [], "context": None},
+    )
     buf["chat"] = chat
     buf["entries"].append(entry)
+    if entry.get("caption"):
+        buf["captions"].append(entry["caption"])
+    if entry.get("context"):
+        buf["context"] = entry["context"]
     existing = buf.get("task")
     if existing and not existing.done():
         existing.cancel()
@@ -95,6 +104,34 @@ async def _flush_batch_after_delay(user_id: int) -> None:
         "batch_flush: user=%d files=%d session=%s",
         user_id, len(entries), session_label,
     )
+
+    # If the user attached a caption to any of the uploads (their intent —
+    # 'analiza esto', 'es mi cv guarda info'), dispatch it to the agentic
+    # loop NOW so the agent acts on the freshly uploaded batch in context.
+    captions = [c for c in (buf.get("captions") or []) if c.strip()]
+    ctx_pkg = buf.get("context")
+    if captions and ctx_pkg:
+        combined_intent = "\n".join(captions)
+        # Annotate with which files were just uploaded so Sonnet has it
+        # explicit in the conversation.
+        annotated = (
+            f"[user just uploaded {len(entries)} file(s) into "
+            f"`{session_label}/`: "
+            f"{', '.join(e.get('filename') for e in entries[:20])}]\n\n"
+            f"User: {combined_intent}"
+        )
+        try:
+            orchestrator = ctx_pkg["orchestrator"]
+            memory = ctx_pkg["memory"]
+            user_id_db = ctx_pkg["user_id_db"]
+            memory.log_message(user_id=user_id_db, text=combined_intent, role="user")
+            response = await orchestrator.process_message(
+                user_id=user_id_db, message=annotated,
+            )
+            if response.text:
+                await safe_send(chat.send_message, response.text[:4000])
+        except Exception as exc:
+            logger.exception("post-flush dispatch failed: %s", exc)
 
 
 def _slugify_for_dir(text: str) -> str:
@@ -342,12 +379,35 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    file = await doc.get_file()
+    # Telegram's API occasionally times out fetching a file in a burst;
+    # retry a couple of times before giving up so a single network blip
+    # doesn't drop one chapter of the user's TFG upload.
+    from telegram.error import TimedOut, NetworkError
+
+    last_exc: Exception | None = None
+    file = None
+    for attempt in range(3):
+        try:
+            file = await doc.get_file(read_timeout=60.0, connect_timeout=20.0)
+            break
+        except (TimedOut, NetworkError) as exc:
+            last_exc = exc
+            logger.warning(
+                "doc.get_file timed out (attempt %d/3) for %s: %s",
+                attempt + 1, doc.file_name, exc,
+            )
+            await asyncio.sleep(2 + attempt * 2)
+    if file is None:
+        await safe_send(
+            chat.send_message,
+            f"⚠️ Couldn't fetch _{doc.file_name}_ from Telegram (network "
+            f"timeout). Please re-send that file.",
+        )
+        return
+
     session_dir = _get_or_create_session_dir(user_id_db, doc.file_name or "")
     raw_name = doc.file_name or f"doc_{msg.message_id}"
     path = session_dir / raw_name
-    # If a same-named file already lives in this session (rare — Telegram
-    # would have deduped via file_id earlier), append a numeric suffix.
     j = 2
     while path.exists():
         stem = Path(raw_name).stem
@@ -470,9 +530,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             except Exception as exc:
                 logger.warning("Document chunk %d indexing failed: %s", i, exc)
 
-    # Buffer for the consolidated/single-file flush. The flush decides:
-    #   - 1 entry → run DocumentAnalyzer + entity extractor + rich receipt
-    #   - 2+ entries → consolidated batch receipt (defer analysis to user request)
+    # Capture caption if the user typed text alongside the file. This is
+    # how 'Tienes aqui mi TFG. Analízalo' arrives — as a caption on one
+    # of the uploads, NOT as a separate text message.
+    caption = (msg.caption or "").strip()
+
+    # Buffer for the flush: store metadata + dispatch refs so the post-
+    # flush trigger can hand the user's intent to the orchestrator.
     _enqueue_batch_entry(
         user_id_db,
         chat,
@@ -484,9 +548,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "extracted": extracted or "",
             "mime_type": doc.mime_type,
             "chunk_count": chunk_count,
-            "llm": llm,
-            "memory": memory,
-            "user_id_db": user_id_db,
+            "caption": caption,
+            "context": {
+                "orchestrator": context.application.bot_data["orchestrator"],
+                "memory": memory,
+                "user_id_db": user_id_db,
+            },
         },
     )
 

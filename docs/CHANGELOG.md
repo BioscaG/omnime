@@ -172,6 +172,11 @@ effect and appends an inline Cancel button to the final response.
   **direct push to main by default** (no PR step). `via_pr=true` opts
   into the PR flow. Auth via Pro/Max subscription mounted at
   `data/claude-auth/` → free within plan limits.
+- `claude_code_analyze(file_record_id, prompt)` — deep-dive analysis
+  of an uploaded file via Claude Code. Read-only (no commit, no
+  push). Free under the subscription. Preferred for PDFs >30 pages,
+  CSVs >5k rows, code dumps, multi-doc analyses — saves API tokens
+  vs feeding the file into the regular agentic loop's context.
 - `github_create_repo` primitive — create new GitHub repos directly
   from natural language.
 - `bot_propose_change` removed (deprecated, replaced by claude_code).

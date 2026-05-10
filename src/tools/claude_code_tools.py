@@ -387,7 +387,121 @@ CLAUDE_CODE_NEW_PROJECT = Tool(
 )
 
 
+async def _claude_code_analyze(args: dict, context: "Context") -> str:
+    """Read-only analysis of a stored file via Claude Code. Free under the
+    user's Pro/Max subscription — better than feeding huge PDFs/CSVs/code
+    files into the agentic loop's API context (which charges per token)."""
+    prompt = (args.get("prompt") or "").strip()
+    if not prompt:
+        return json.dumps({"error": "prompt is required"})
+    if not _has_claude_cli():
+        return json.dumps({"error": "Claude Code CLI not installed"})
+
+    user_id = int(getattr(context, "user_id", 0) or 0)
+    fid = args.get("file_record_id")
+    filename = (args.get("filename") or "").strip()
+
+    # Resolve to a local Path. Reuses the same logic as drive_tools/chat_tools.
+    src_path: Path | None = None
+    name: str | None = None
+    if fid is not None:
+        from sqlalchemy import select
+        from src.memory import models as m
+        from src.memory.db import session_scope
+
+        with session_scope() as s:
+            row = s.execute(
+                select(m.FileRecord)
+                .where(m.FileRecord.id == int(fid))
+                .where(m.FileRecord.user_id == user_id)
+            ).scalar_one_or_none()
+            if row is None:
+                return json.dumps({"error": f"file_record_id {fid} not found"})
+            name = row.filename
+            src_path = Path(settings.uploads_dir) / (name or "")
+    elif filename:
+        name = filename
+        src_path = Path(settings.uploads_dir) / filename
+    else:
+        return json.dumps({"error": "either file_record_id or filename is required"})
+
+    if src_path is None or not src_path.exists():
+        return json.dumps({"error": f"file not found on disk: {name}"})
+
+    timeout = int(args.get("timeout") or DEFAULT_TIMEOUT)
+    timeout = max(60, min(MAX_TIMEOUT, timeout))
+
+    workdir = Path(tempfile.mkdtemp(prefix="omnime-analyze-"))
+    try:
+        target = workdir / src_path.name
+        shutil.copy(src_path, target)
+        size_kb = target.stat().st_size // 1024
+
+        full_prompt = (
+            f"You are analysing the file `./{src_path.name}` in this "
+            f"directory. Read it fully (it's {size_kb} KB). User's "
+            f"question / instruction:\n\n{prompt}\n\n"
+            "Reply with the analysis. Be concrete: cite specific "
+            "sections / rows / lines when relevant. Match the user's "
+            "language."
+        )
+
+        logger.info(
+            "claude_code_analyze: file=%s size=%dKB prompt=%s",
+            src_path.name, size_kb, prompt[:80],
+        )
+        ok, stdout, stderr = _run_claude(full_prompt, workdir, timeout)
+        if not ok:
+            return json.dumps({
+                "status": "claude_failed",
+                "filename": src_path.name,
+                "stderr": (stderr or "")[:1500],
+            })
+
+        return json.dumps({
+            "status": "analyzed",
+            "filename": src_path.name,
+            "size_kb": size_kb,
+            "analysis": (stdout or "")[:10000],
+        }, ensure_ascii=False)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+CLAUDE_CODE_ANALYZE = Tool(
+    name="claude_code_analyze",
+    description=(
+        "Deep-dive analysis of an uploaded file using Claude Code (free "
+        "under the user's Pro/Max subscription). PREFERRED over feeding "
+        "the file into the regular loop when:\n"
+        "- The file is large (>50KB / >30 pages PDF / >5k row CSV / "
+        "  >500 line code)\n"
+        "- The user wants thorough, multi-pass analysis\n"
+        "- The file is structured data (CSV / JSON / code) where "
+        "  Claude Code's tools (Grep, Read, Bash) help.\n\n"
+        "Resolve the file via file_record_id (preferred — from "
+        "files_list / files_search) or filename. Returns the analysis "
+        "text — no commit, no push, no PR. For SHORT files where the "
+        "answer fits in one page, the regular loop is fine and faster."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "file_record_id": {"type": "integer", "description": "Preferred: id from files_list/files_search."},
+            "filename": {"type": "string", "description": "Alternative: filename inside data/uploads/."},
+            "prompt": {
+                "type": "string",
+                "description": "What to analyse. Be specific: 'extract all dates and amounts', 'summarise chapter by chapter', 'find inconsistencies', etc.",
+            },
+            "timeout": {"type": "integer", "default": DEFAULT_TIMEOUT, "minimum": 60, "maximum": MAX_TIMEOUT},
+        },
+        "required": ["prompt"],
+    },
+    run=_claude_code_analyze,
+)
+
+
 def build_claude_code_tools() -> list[Tool]:
     if not _has_claude_cli():
         return []
-    return [CLAUDE_CODE, CLAUDE_CODE_NEW_PROJECT]
+    return [CLAUDE_CODE, CLAUDE_CODE_NEW_PROJECT, CLAUDE_CODE_ANALYZE]

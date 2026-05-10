@@ -177,6 +177,7 @@ These are PROJECT-LEVEL preferences, learned from past mistakes. Honor them:
 - `claude_code(prompt, repo='self')` — work on omnime itself
 - `claude_code(prompt, repo='owner/name')` — work on any repo the token can access
 - `claude_code_new_project(name, prompt, description?, private?)` — create + scaffold a fresh repo
+- `claude_code_analyze(file_record_id, prompt)` — deep-dive analysis of an uploaded file (PDF/CSV/code/etc.). Read-only — no commits. Free under the subscription, preferred over feeding huge files into the API context.
 
 Read-only prompts ('explain X', 'audit Y') return the analysis as text without committing. Write prompts produce a diff → commit → **push directly to base_branch** (default `main`) → repo's auto-deploy ships the change.
 

@@ -132,11 +132,17 @@ The bot uses **your Claude Pro/Max subscription** to do real programming work. F
 > "añade un comando /weather con Open-Meteo"  
 > "refactoriza browser_agent.py, mantén comportamiento, corre tests"  
 > "explica cómo funciona el flow de auth de Gmail" → análisis sin commit  
-> "crea un proyecto nuevo `health-tracker`: FastAPI + Postgres + webhook Strava"
+> "crea un proyecto nuevo `health-tracker`: FastAPI + Postgres + webhook Strava"  
+> "analiza el PDF que te pasé en profundidad" → `claude_code_analyze` (free, deep-dive)  
+> "revisa el CSV de las facturas y dime si hay duplicados" → `claude_code_analyze`
 
-**Default behavior:** direct push to `main`. Auto-deploy ships the change. Pass *"con PR para revisar"* / *"open a PR"* to switch to PR mode.
+**Default behavior:** direct push to `main` for code edits. Auto-deploy ships the change. Pass *"con PR para revisar"* / *"open a PR"* to switch to PR mode.
 
-Primitives: `claude_code(prompt, repo='self|owner/name', via_pr?, ...)` · `claude_code_new_project(name, prompt, ...)`.  
+Primitives:
+- `claude_code(prompt, repo='self|owner/name', via_pr?, ...)` — code edits / fixes / refactors
+- `claude_code_new_project(name, prompt, ...)` — create + scaffold a new repo
+- `claude_code_analyze(file_record_id, prompt)` — deep-dive analysis of an uploaded file (PDF / CSV / code / large doc). Read-only, no commit. Default for files >50KB.
+
 Lookup helpers (trivial single-line): `bot_read_source / bot_grep_source / github_read_file / github_search_code`.
 
 **Setup:** see `docs/SETUP.md` (or AGENTS.md) for the one-time `claude login` inside the container.

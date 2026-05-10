@@ -838,6 +838,97 @@ class Orchestrator:
             except Exception as exc:
                 logger.warning("forced final-answer step failed: %s", exc)
 
+        # Self-check turn: Haiku reads the final text + the list of tools
+        # actually called and decides whether the model is claiming an
+        # action it didn't perform. Pure-LLM, no regex — works across
+        # any language and phrasing because Haiku understands intent.
+        called_tool_names = sorted({name for name, _ in skill_outputs})
+        if final_text and final_text.strip():
+            try:
+                hallucination_reason = await self._self_check_for_hallucination(
+                    final_text, called_tool_names,
+                )
+            except Exception as exc:
+                logger.debug("self-check failed: %s", exc)
+                hallucination_reason = None
+        else:
+            hallucination_reason = None
+
+        if hallucination_reason:
+            logger.warning(
+                "agentic_hallucination_detected: %s | text=%s",
+                hallucination_reason, _short_repr(final_text, limit=200),
+            )
+            try:
+                store.append_user(int(user_id), (
+                    f"❗ HALLUCINATION CHECK FLAGGED: {hallucination_reason} "
+                    "Either CALL the correct tool right now, OR rewrite "
+                    "your previous message honestly ('I haven't actually "
+                    "done that yet, want me to?'). Don't repeat the false "
+                    "claim."
+                ))
+                corrective = await self.llm.agentic_step(
+                    messages=store.history(int(user_id)),
+                    tools=tools,
+                    system=system,
+                    model_tier=driver_tier,
+                    max_tokens=1500,
+                )
+                if corrective.tool_calls:
+                    store.append_assistant(int(user_id), corrective.raw_content)
+                    new_results: list[dict[str, Any]] = []
+                    for call in corrective.tool_calls:
+                        logger.info(
+                            "corrective_tool_call: tool=%s args=%s",
+                            call.name, _short_repr(call.input),
+                        )
+                        tool = primitives_by_name.get(call.name)
+                        if tool is None:
+                            new_results.append({
+                                "type": "tool_result", "tool_use_id": call.id,
+                                "content": f"(unknown tool: {call.name})",
+                                "is_error": True,
+                            })
+                            continue
+                        t0 = time.monotonic()
+                        try:
+                            out = await tool.run(call.input or {}, context)
+                            ok = True
+                            err: Exception | None = None
+                        except Exception as exc:
+                            out = ""
+                            ok = False
+                            err = exc
+                        record_tool_call(
+                            user_id=user_id, tool_name=tool.name,
+                            args=call.input or {}, ok=ok,
+                            latency_ms=int((time.monotonic() - t0) * 1000),
+                            result_preview=out if ok else None,
+                            error=str(err) if err else None,
+                            turn_message=message,
+                        )
+                        skill_outputs.append((tool.name, out if ok else f"Error: {err}"))
+                        new_results.append({
+                            "type": "tool_result", "tool_use_id": call.id,
+                            "content": (out if ok else f"Error: {err}")[:8000],
+                            **({"is_error": True} if not ok else {}),
+                        })
+                    store.append_tool_results(int(user_id), new_results)
+                    final_step = await self.llm.agentic_step(
+                        messages=store.history(int(user_id)),
+                        tools=[], system=system,
+                        model_tier=driver_tier, max_tokens=900,
+                    )
+                    final_text = final_step.text or final_text
+                    if final_text:
+                        store.append_assistant(int(user_id), final_step.raw_content)
+                else:
+                    final_text = corrective.text or final_text
+                    if final_text:
+                        store.append_assistant(int(user_id), corrective.raw_content)
+            except Exception as exc:
+                logger.warning("hallucination correction failed: %s", exc)
+
         if not final_text:
             final_text = "I tried but didn't produce anything useful — try rephrasing?"
 
@@ -959,6 +1050,48 @@ class Orchestrator:
         return Response(text=text, intent=Intent.CHAT, metadata={"private": True})
 
     # --- Helpers -------------------------------------------------------
+    async def _self_check_for_hallucination(
+        self, final_text: str, called_tools: list[str],
+    ) -> str | None:
+        """Ask Haiku whether the bot's reply claims an action it didn't
+        actually perform. Pure-LLM check — works for any language /
+        phrasing without regex. Returns a short reason string when the
+        check fails, or None when the reply looks honest."""
+        prompt = (
+            "You are checking whether an assistant's reply is HONEST about "
+            "what it actually did this turn.\n\n"
+            f"Tools the assistant ACTUALLY CALLED this turn: "
+            f"{called_tools or '(none)'}\n\n"
+            "Assistant's final reply to the user:\n"
+            f"\"\"\"\n{final_text[:3000]}\n\"\"\"\n\n"
+            "Question: does the reply CLAIM that an action took place "
+            "(saved to memory, sent an email, scheduled an event, "
+            "created an issue, deleted/forgot something, registered as a "
+            "project, etc.) WITHOUT a corresponding tool call in the list "
+            "above?\n\n"
+            "Output exactly one line:\n"
+            "- If everything claimed is backed by a tool call OR the reply "
+            "  doesn't claim any action: HONEST\n"
+            "- If the reply claims an action that wasn't backed: "
+            "  HALLUCINATION: <one-sentence description of the unbacked claim>"
+        )
+        try:
+            verdict = await self.llm.complete(
+                prompt=prompt,
+                system="You are a strict integrity checker. One line only.",
+                model_tier="tiny",
+                max_tokens=120,
+                temperature=0.0,
+            )
+        except Exception as exc:
+            logger.debug("self-check Haiku call failed: %s", exc)
+            return None
+        line = (verdict or "").strip().splitlines()[0] if verdict else ""
+        if line.upper().startswith("HALLUCINATION"):
+            _, _, reason = line.partition(":")
+            return reason.strip() or "claim not backed by tool call"
+        return None
+
     @staticmethod
     def _is_meaningful(extraction: Any) -> bool:
         return bool(

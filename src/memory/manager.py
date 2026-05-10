@@ -116,18 +116,42 @@ class MemoryManager:
     ) -> StoreResult:
         extraction = await self.extractor.extract(message, context=context_hint)
 
+        # LLM-based dedup pre-checks. Done once per kind so we can pass
+        # the existing list to Haiku for semantic matching ('TFG SVD' ==
+        # 'Anatomía Emocional de BERT'). Falls back to None on any error,
+        # which means upsert uses its exact-match logic — safe degrade.
+        from src.memory.dedup import find_duplicate
+
+        async def _resolve_match(kind: str, new: dict, existing: list) -> int | None:
+            try:
+                return await find_duplicate(self.llm, kind, new, existing)
+            except Exception as exc:
+                logger.debug("dedup %s failed: %s", kind, exc)
+                return None
+
         with session_scope() as s:
             store = StructuredStore(s)
+            existing_projects = store.list_projects(user_id)
+            existing_work = store.list_work_experience(user_id)
+            existing_edu = store.list_education(user_id)
+            existing_skills = store.list_skills(user_id)
+            existing_contacts = store.list_contacts(user_id)
+
             for proj in extraction.projects:
-                store.upsert_project(user_id=user_id, **proj)
+                mid = await _resolve_match("project", proj, existing_projects)
+                store.upsert_project(user_id=user_id, match_id=mid, **proj)
             for we in extraction.work_experience:
-                store.upsert_work_experience(user_id=user_id, **we)
+                mid = await _resolve_match("work_experience", we, existing_work)
+                store.upsert_work_experience(user_id=user_id, match_id=mid, **we)
             for ed in extraction.education:
-                store.upsert_education(user_id=user_id, **ed)
+                mid = await _resolve_match("education", ed, existing_edu)
+                store.upsert_education(user_id=user_id, match_id=mid, **ed)
             for sk in extraction.skills:
-                store.upsert_skill(user_id=user_id, **sk)
+                mid = await _resolve_match("skill", sk, existing_skills)
+                store.upsert_skill(user_id=user_id, match_id=mid, **sk)
             for c in extraction.contacts:
-                store.upsert_contact(user_id=user_id, **c)
+                mid = await _resolve_match("contact", c, existing_contacts)
+                store.upsert_contact(user_id=user_id, match_id=mid, **c)
             for ach in extraction.achievements:
                 store.add_achievement(user_id=user_id, **ach)
             for ev in extraction.life_events:

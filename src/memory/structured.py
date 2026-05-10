@@ -51,15 +51,20 @@ class StructuredStore:
         return user
 
     # --- Projects ---------------------------------------------------------
-    def upsert_project(self, user_id: int, **data: Any) -> m.Project:
-        name = data.get("name")
+    def upsert_project(self, user_id: int, match_id: int | None = None, **data: Any) -> m.Project:
         existing = None
-        if name:
-            existing = self.session.scalar(
-                select(m.Project)
-                .where(m.Project.user_id == user_id)
-                .where(m.Project.name.ilike(name))
-            )
+        if match_id is not None:
+            existing = self.session.get(m.Project, match_id)
+            if existing is not None and existing.user_id != user_id:
+                existing = None  # security: don't merge across users
+        if existing is None:
+            name = data.get("name")
+            if name:
+                existing = self.session.scalar(
+                    select(m.Project)
+                    .where(m.Project.user_id == user_id)
+                    .where(m.Project.name.ilike(name))
+                )
         data["start_date"] = _coerce_date(data.get("start_date"))
         data["end_date"] = _coerce_date(data.get("end_date"))
         if existing:
@@ -79,11 +84,15 @@ class StructuredStore:
         return list(self.session.scalars(stmt.order_by(m.Project.start_date.desc().nullslast())))
 
     # --- Work experience --------------------------------------------------
-    def upsert_work_experience(self, user_id: int, **data: Any) -> m.WorkExperience:
+    def upsert_work_experience(self, user_id: int, match_id: int | None = None, **data: Any) -> m.WorkExperience:
+        existing = None
+        if match_id is not None:
+            existing = self.session.get(m.WorkExperience, match_id)
+            if existing is not None and existing.user_id != user_id:
+                existing = None
         company = data.get("company")
         role = data.get("role")
-        existing = None
-        if company and role:
+        if existing is None and company and role:
             existing = self.session.scalar(
                 select(m.WorkExperience)
                 .where(m.WorkExperience.user_id == user_id)
@@ -109,11 +118,15 @@ class StructuredStore:
         )
 
     # --- Education -------------------------------------------------------
-    def upsert_education(self, user_id: int, **data: Any) -> m.Education:
+    def upsert_education(self, user_id: int, match_id: int | None = None, **data: Any) -> m.Education:
+        existing = None
+        if match_id is not None:
+            existing = self.session.get(m.Education, match_id)
+            if existing is not None and existing.user_id != user_id:
+                existing = None
         institution = data.get("institution")
         degree = data.get("degree")
-        existing = None
-        if institution:
+        if existing is None and institution:
             stmt = select(m.Education).where(
                 m.Education.user_id == user_id,
                 m.Education.institution.ilike(institution),
@@ -138,15 +151,20 @@ class StructuredStore:
         return list(self.session.scalars(stmt.order_by(m.Education.end_date.desc().nullslast())))
 
     # --- Skills ----------------------------------------------------------
-    def upsert_skill(self, user_id: int, **data: Any) -> m.Skill:
-        name = data.get("name")
+    def upsert_skill(self, user_id: int, match_id: int | None = None, **data: Any) -> m.Skill:
         existing = None
-        if name:
-            existing = self.session.scalar(
-                select(m.Skill)
-                .where(m.Skill.user_id == user_id)
-                .where(m.Skill.name.ilike(name))
-            )
+        if match_id is not None:
+            existing = self.session.get(m.Skill, match_id)
+            if existing is not None and existing.user_id != user_id:
+                existing = None
+        if existing is None:
+            name = data.get("name")
+            if name:
+                existing = self.session.scalar(
+                    select(m.Skill)
+                    .where(m.Skill.user_id == user_id)
+                    .where(m.Skill.name.ilike(name))
+                )
         data["last_used"] = _coerce_date(data.get("last_used"))
         if existing:
             for k, v in data.items():
@@ -165,17 +183,22 @@ class StructuredStore:
         return list(self.session.scalars(stmt.order_by(m.Skill.name)))
 
     # --- Contacts --------------------------------------------------------
-    def upsert_contact(self, user_id: int, **data: Any) -> m.Contact:
+    def upsert_contact(self, user_id: int, match_id: int | None = None, **data: Any) -> m.Contact:
         from src.utils.crypto import encrypt
 
-        name = data.get("name")
         existing = None
-        if name:
-            existing = self.session.scalar(
-                select(m.Contact)
-                .where(m.Contact.user_id == user_id)
-                .where(m.Contact.name.ilike(name))
-            )
+        if match_id is not None:
+            existing = self.session.get(m.Contact, match_id)
+            if existing is not None and existing.user_id != user_id:
+                existing = None
+        if existing is None:
+            name = data.get("name")
+            if name:
+                existing = self.session.scalar(
+                    select(m.Contact)
+                    .where(m.Contact.user_id == user_id)
+                    .where(m.Contact.name.ilike(name))
+                )
         data["last_interaction"] = _coerce_date(data.get("last_interaction"))
         if "relationship" in data:
             data["relationship_type"] = data.pop("relationship")

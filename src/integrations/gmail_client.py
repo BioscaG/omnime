@@ -36,13 +36,17 @@ class GmailClient:
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
 
+        # NOTE: don't pass `scopes=self.SCOPES` here — google-auth would forward
+        # them to the refresh endpoint, and Google returns `invalid_scope` if
+        # the listed scopes don't exactly match what the user originally
+        # consented to. The refresh token already encodes the granted scopes,
+        # so omitting them lets the refresh succeed with whatever was granted.
         creds = Credentials(
             token=None,
             refresh_token=settings.gmail_refresh_token,
             client_id=settings.gmail_client_id,
             client_secret=settings.gmail_client_secret,
             token_uri="https://oauth2.googleapis.com/token",
-            scopes=self.SCOPES,
         )
         self._service = build("gmail", "v1", credentials=creds, cache_discovery=False)
         return self._service

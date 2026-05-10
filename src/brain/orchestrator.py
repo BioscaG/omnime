@@ -459,12 +459,34 @@ class Orchestrator:
             "\nLEARNED USER PREFERENCES (from observed behaviour):\n" + learned_prefs
             if learned_prefs else ""
         )
+
+        # Inject current datetime so the model can compute relative phrases
+        # ('in 2 minutes', 'tomorrow at 9am') into ISO 8601 without asking
+        # the user. UTC for tool calls (memory_remind, calendar_create);
+        # Madrid local for user-facing context.
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+
+        now_utc = datetime.now(timezone.utc)
+        try:
+            now_local = now_utc.astimezone(ZoneInfo("Europe/Madrid"))
+        except Exception:
+            now_local = now_utc
+        time_block = (
+            f"\nCURRENT TIME:\n"
+            f"- UTC: {now_utc.isoformat(timespec='seconds')}\n"
+            f"- Local (Europe/Madrid): {now_local.isoformat(timespec='seconds')} "
+            f"({now_local.strftime('%A %d %B %Y, %H:%M')})\n"
+            f"Use UTC when passing datetimes to tools (memory_remind.due_at, "
+            f"calendar_create.start/end). For user-facing text, you can use "
+            f"local time naturally ('a las 17:30').\n"
+        )
         system = build_system_prompt(
             user_name=context.profile.get("name"),
             living_profile=context.living_profile,
             communication_style=context.profile.get("communication_style"),
             capabilities=capabilities,
-            extra=(prefs_block +
+            extra=(time_block + prefs_block +
                 "\nYou are operating as a fully agentic personal assistant. "
                 "Every capability is exposed to you as a TOOL primitive — "
                 "Gmail CRUD (gmail_list, gmail_read, gmail_send, ...), memory "

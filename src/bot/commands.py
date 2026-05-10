@@ -295,44 +295,55 @@ async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Switch the agentic-loop driver model on the fly.
+    """Switch the agentic-loop driver model.
 
     Usage:
       /model           — show current
-      /model haiku     — Haiku 4.5  (cheapest, ~5× less than Sonnet, OK for simple)
-      /model sonnet    — Sonnet 4.6 (default, balanced)
-      /model opus      — Opus 4.7   (strongest, ~5× Sonnet's cost)
+      /model auto      — heuristic picks per message (DEFAULT)
+      /model haiku     — Haiku 4.5  (cheap, simple intents)
+      /model sonnet    — Sonnet 4.6 (balanced)
+      /model opus      — Opus 4.7   (strongest, ~5× Sonnet)
     """
     if not await authorize(update, context):
         return
     from src.brain.runtime_config import (
+        AUTO,
         TIER_LABELS,
-        VALID_TIERS,
         agentic_model_tier,
         set_agentic_model_tier,
     )
 
     arg = " ".join(context.args or []).strip().lower()
     aliases = {
+        "auto": AUTO,
+        "automatic": AUTO,
+        "auto-pick": AUTO,
+        "heuristic": AUTO,
+        "default": AUTO,
         "haiku": "tiny",
         "tiny": "tiny",
         "cheap": "tiny",
         "sonnet": "fast",
         "fast": "fast",
         "balanced": "fast",
-        "default": "fast",
         "opus": "powerful",
         "powerful": "powerful",
         "strong": "powerful",
     }
     if not arg:
         current = agentic_model_tier()
+        if current == AUTO:
+            mode_line = "**Modo:** `auto` — heurística decide por mensaje"
+        else:
+            mode_line = f"**Modo:** override manual `{current}` — {TIER_LABELS[current]}"
         lines = [
-            f"**Driver actual:** `{current}` — {TIER_LABELS[current]}\n",
+            mode_line + "\n",
             "**Cambiar con:**",
-            "- `/model haiku` — barato, suficiente para mensajes simples",
-            "- `/model sonnet` — equilibrado, default",
-            "- `/model opus` — máxima calidad, ~5× coste",
+            "- `/model auto` — vuelve a heurística (recomendado)",
+            "- `/model haiku` — fuerza Haiku (barato)",
+            "- `/model sonnet` — fuerza Sonnet",
+            "- `/model opus` — fuerza Opus (máxima calidad)",
+            "\n_Heurística:_ mensajes simples → Haiku · compose / acciones → Sonnet · self-edit → Opus.",
         ]
         await safe_send(update.effective_message.reply_text, "\n".join(lines))
         return
@@ -340,15 +351,18 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if target is None:
         await safe_send(
             update.effective_message.reply_text,
-            f"No reconozco `{arg}`. Usa: haiku / sonnet / opus.",
+            f"No reconozco `{arg}`. Usa: auto / haiku / sonnet / opus.",
         )
         return
     set_agentic_model_tier(target)
-    await safe_send(
-        update.effective_message.reply_text,
-        f"✅ Driver cambiado a `{target}` — {TIER_LABELS[target]}\n"
-        f"_Toma efecto en el próximo mensaje. Persistente entre reinicios._",
-    )
+    if target == AUTO:
+        msg = "✅ Modo `auto` — heurística decide por mensaje desde el próximo."
+    else:
+        msg = (
+            f"✅ Override `{target}` activo — {TIER_LABELS[target]}.\n"
+            "_Vuelve a heurística con `/model auto` cuando quieras._"
+        )
+    await safe_send(update.effective_message.reply_text, msg)
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

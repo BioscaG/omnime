@@ -73,21 +73,31 @@ def all_values() -> dict[str, Any]:
 # --- Convenience accessors -----------------------------------------------
 
 VALID_TIERS = ("tiny", "fast", "powerful")
+AUTO = "auto"
+ALL_VALUES = VALID_TIERS + (AUTO,)
 TIER_LABELS = {
+    AUTO: "automatic — heuristic picks per message",
     "tiny": "Haiku 4.5 — fast & cheap",
-    "fast": "Sonnet 4.6 — balanced (recommended for the agentic driver)",
+    "fast": "Sonnet 4.6 — balanced",
     "powerful": "Opus 4.7 — strongest reasoning, ~5× cost",
 }
 
 
 def agentic_model_tier() -> str:
+    """Returns the user's CHOICE — could be 'auto' or a specific tier.
+    Use ``is_auto_mode()`` to distinguish; use ``effective_tier(message)``
+    to get the actual tier to use for a given message."""
     val = get("agentic_model_tier")
-    if val in VALID_TIERS:
+    if val in ALL_VALUES:
         return val
-    return "fast"
+    return AUTO  # default to auto
 
 
-def set_agentic_model_tier(tier: str) -> None:
-    if tier not in VALID_TIERS:
-        raise ValueError(f"invalid tier: {tier}. Must be one of {VALID_TIERS}")
-    set_value("agentic_model_tier", tier)
+def is_auto_mode() -> bool:
+    return agentic_model_tier() == AUTO
+
+
+def set_agentic_model_tier(value: str) -> None:
+    if value not in ALL_VALUES:
+        raise ValueError(f"invalid tier: {value}. Must be one of {ALL_VALUES}")
+    set_value("agentic_model_tier", value)

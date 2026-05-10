@@ -415,16 +415,65 @@ class Orchestrator:
         return await self._run_agentic_loop(user_id, message, context)
 
     AGENTIC_MAX_STEPS = 8
-    # Default driver tier — overridable at runtime via /model. Sonnet 4.6
-    # is the sweet spot for an agentic personal assistant; users can drop
-    # to Haiku via `/model haiku` if cost is a concern, or escalate to
-    # `/model opus` for hard reasoning bursts.
-    AGENTIC_MODEL_TIER_DEFAULT = "fast"
+    # Driver tier resolution:
+    #   /model haiku|sonnet|opus → manual override, used as-is
+    #   /model auto              → heuristic picks per message (default)
+    AGENTIC_MODEL_TIER_DEFAULT = "auto"
 
+    def _select_driver_tier(self, message: str) -> str:
+        """Resolve the model tier for THIS message. Manual overrides win;
+        otherwise apply a coarse heuristic that biases toward Haiku for
+        simple queries and Sonnet for compose / write actions, escalating
+        to Opus for self-edit."""
+        from src.brain.runtime_config import agentic_model_tier, AUTO
+
+        choice = agentic_model_tier()
+        if choice != AUTO:
+            return choice
+        return self._heuristic_tier(message or "")
+
+    @staticmethod
+    def _heuristic_tier(message: str) -> str:
+        msg = message.lower().strip()
+
+        # Self-edit / code-reasoning intent → Opus.
+        if re.search(
+            r"\b(arregla|fix|debug|edita el c[oó]digo|edit the code|"
+            r"refactor|abre.*pr|propose a fix|self.?edit)\b",
+            msg,
+        ):
+            return "powerful"
+
+        # Compound requests (multiple verbs / conjunctions / plan-like) → Sonnet.
+        if Orchestrator._COMPLEX_TASK_RE.search(msg):
+            return "fast"
+
+        # Action verbs that imply external write → Sonnet (safer than Haiku
+        # for gmail_send / calendar_create / bot_propose_change etc).
+        if re.search(
+            r"\b(env[ií]a(lo|le|me|mela|melo)?|env[ií]o|env[ií]ame|"
+            r"send( it| that)?|"
+            r"ag[ée]nda(me|le)?|book me|schedule|create.*event|"
+            r"crea(me|te)?|publica|post(ea)?|"
+            r"reserva|confirma)\b",
+            msg,
+        ):
+            return "fast"
+
+        # Long messages are usually compound or detailed → Sonnet.
+        if len(message) > 280:
+            return "fast"
+
+        # Default for short/simple → Haiku.
+        return "tiny"
+
+    # Kept for log strings that reference the historical attribute name.
     @property
-    def AGENTIC_MODEL_TIER(self) -> str:  # noqa: N802 — keep the legacy name
-        from src.brain.runtime_config import agentic_model_tier
-        return agentic_model_tier()
+    def AGENTIC_MODEL_TIER(self) -> str:  # noqa: N802
+        from src.brain.runtime_config import agentic_model_tier, AUTO
+
+        choice = agentic_model_tier()
+        return choice if choice != AUTO else "fast"
 
     # Heuristic: tasks that compose 3+ verbs or span multiple domains often
     # need more than the default 5 tool calls. We bump the cap to the hard
@@ -452,10 +501,6 @@ class Orchestrator:
         tools = [tool_to_def(t) for t in primitive_tools]
         if not tools:
             return await self._handle_chat(user_id, message, context)
-        logger.info(
-            "agentic_loop_start: user=%d tools_available=%d msg=%s",
-            user_id, len(tools), _short_repr(message, limit=120),
-        )
 
         capabilities = self._capabilities_block()
         learned_prefs = render_preferences_for_prompt(int(user_id), min_confidence=0.4)
@@ -633,13 +678,19 @@ class Orchestrator:
         if not self._COMPLEX_TASK_RE.search(message or ""):
             max_steps = min(max_steps, 5)
 
+        driver_tier = self._select_driver_tier(message)
+        logger.info(
+            "agentic_loop_start: user=%d tools_available=%d tier=%s msg=%s",
+            user_id, len(tools), driver_tier, _short_repr(message, limit=120),
+        )
+
         for step in range(max_steps):
             try:
                 result = await self.llm.agentic_step(
                     messages=history,
                     tools=tools,
                     system=system,
-                    model_tier=self.AGENTIC_MODEL_TIER,
+                    model_tier=driver_tier,
                     max_tokens=1500,
                 )
             except Exception as exc:
@@ -737,7 +788,7 @@ class Orchestrator:
                     messages=store.history(int(user_id)),
                     tools=[],  # no tools — must produce text
                     system=system,
-                    model_tier=self.AGENTIC_MODEL_TIER,
+                    model_tier=driver_tier,
                     max_tokens=900,
                 )
                 final_text = forced.text or ""

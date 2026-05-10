@@ -175,6 +175,44 @@ def _schedule_jobs(application: Application, memory: MemoryManager, llm: LLMClie
         except Exception as exc:
             logger.warning("Weekly review job failed: %s", exc)
 
+    async def birthday_reminder_job(context):
+        try:
+            from datetime import date as _date
+
+            today = _date.today()
+            with __import__("src.memory.db", fromlist=["session_scope"]).session_scope() as s:
+                from sqlalchemy import select
+                from src.memory import models as mm
+
+                contacts = list(s.scalars(select(mm.Contact).where(mm.Contact.user_id == user_id_db)))
+                upcoming = []
+                for c in contacts:
+                    md = c.extra_metadata or {}
+                    bday_iso = md.get("birthday")
+                    if not bday_iso:
+                        continue
+                    try:
+                        from datetime import datetime as _dt
+
+                        bday = _dt.fromisoformat(bday_iso).date()
+                    except ValueError:
+                        continue
+                    next_occurrence = bday.replace(year=today.year)
+                    if next_occurrence < today:
+                        next_occurrence = next_occurrence.replace(year=today.year + 1)
+                    delta = (next_occurrence - today).days
+                    if delta <= 7:
+                        upcoming.append((delta, c.name, next_occurrence))
+            if upcoming:
+                upcoming.sort()
+                lines = "\n".join(f"• {n} — {d.isoformat()} (in {days}d)" for days, n, d in upcoming)
+                await context.bot.send_message(
+                    chat_id=settings.telegram_user_id,
+                    text=f"🎂 Upcoming birthdays:\n{lines}",
+                )
+        except Exception as exc:
+            logger.warning("Birthday reminder failed: %s", exc)
+
     async def notion_sync_job(context):
         try:
             from src.integrations.notion_client import NotionClient
@@ -197,6 +235,7 @@ def _schedule_jobs(application: Application, memory: MemoryManager, llm: LLMClie
 
     job_queue.run_daily(weekly_review_job, time=dtime_(hour=19, minute=0), days=(6,))
     job_queue.run_repeating(notion_sync_job, interval=60 * 60 * 6, first=60 * 30)
+    job_queue.run_daily(birthday_reminder_job, time=dtime_(hour=8, minute=15))
 
 
 def run() -> None:

@@ -170,7 +170,7 @@ These are PROJECT-LEVEL preferences, learned from past mistakes. Honor them:
 
 ---
 
-## Code work playbook — `claude_code` is the default
+## Code work playbook — `claude_code` is the default (direct push)
 
 **Anything substantial involving code (audit, deep dive, debug, refactor, fix, feature, scaffold a new project)** goes through `claude_code` / `claude_code_new_project`. They're free within the user's Pro/Max subscription and far better at multi-file navigation than the fast-lookup primitives.
 
@@ -178,7 +178,9 @@ These are PROJECT-LEVEL preferences, learned from past mistakes. Honor them:
 - `claude_code(prompt, repo='owner/name')` — work on any repo the token can access
 - `claude_code_new_project(name, prompt, description?, private?)` — create + scaffold a fresh repo
 
-Read-only prompts ('explain X', 'audit Y') return the analysis as text and don't open a PR. Write prompts produce a diff → branch → commit → PR.
+Read-only prompts ('explain X', 'audit Y') return the analysis as text without committing. Write prompts produce a diff → commit → **push directly to base_branch** (default `main`) → repo's auto-deploy ships the change.
+
+PR mode is opt-in: pass `via_pr=true` ONLY when the user explicitly asks for review-via-PR. Default is direct push.
 
 **Reserved for trivial lookups only:**
 - `bot_read_source(path)` / `bot_grep_source(pattern)` — own repo, instant, $0.01

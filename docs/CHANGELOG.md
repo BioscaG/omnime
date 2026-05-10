@@ -165,6 +165,40 @@ Scheduled-send cancellation gets surfaced automatically: when the model
 calls `gmail_send` with a delay, the orchestrator detects the tool side
 effect and appends an inline Cancel button to the final response.
 
+## 2026-05-10 — Claude Code as default code tool + direct push + slash cleanup
+
+- `claude_code` and `claude_code_new_project` primitives — clone any
+  repo into /tmp, run Claude Code with the prompt, capture diff,
+  **direct push to main by default** (no PR step). `via_pr=true` opts
+  into the PR flow. Auth via Pro/Max subscription mounted at
+  `data/claude-auth/` → free within plan limits.
+- `github_create_repo` primitive — create new GitHub repos directly
+  from natural language.
+- `bot_propose_change` removed (deprecated, replaced by claude_code).
+- `bot_read_source` / `bot_grep_source` reframed as fast-lookup-only.
+- Slash commands trimmed: ~13 redundant ones removed (cv, email,
+  briefing, review, evolve, plan, agent, fetch, browse, journal, etc.)
+  — natural language handles them all via the agentic loop. Kept ~20
+  for rich-UI dashboards, control, and admin. `/start` rewritten.
+- `/model` now defaults to `auto` mode where a per-message heuristic
+  picks Haiku / Sonnet / Opus based on intent (compose / write /
+  self-edit). Manual override remains via `/model haiku|sonnet|opus`;
+  `/model auto` returns to heuristic.
+- Voice transcription switched to `faster-whisper` (CPU, no PyTorch,
+  ~150MB model, free).
+- Health checks — every 6h, pings each enabled integration with the
+  cheapest read it has; alerts via Telegram when one starts failing
+  (catches token expiry).
+- Pattern learner — daily extraction of durable preferences from the
+  last 50 messages and 200 tool calls; injected into the system prompt
+  so the agent honours user's style without being told twice.
+- Backups: `BACKUP_REMOTE=gdrive` target ships the tar.gz to
+  `OMNIME/Backups/` in Drive. Optional `BACKUP_ENV_PASSPHRASE`
+  encrypts `.env` (AES-GCM, scrypt KDF) inside the tar.
+- Docker: bind-mounted `data/claude-auth:/root/.claude` for the
+  subscription credentials. Dockerfile installs Node 20 + Claude Code
+  globally.
+
 ## 2026-05-10 — agentic multi-tool loop + tiered routing
 
 OMNIME now drives **multi-step compound requests** in a single message.

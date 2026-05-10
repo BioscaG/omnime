@@ -1,115 +1,155 @@
 # OMNIME — Command reference
 
-OMNIME accepts **natural conversation** for ~90% of use. Slash commands are
-shortcuts that skip the intent classifier (cheaper + faster) when you already
-know what you want.
+OMNIME's primary interface is **natural language**. Slash commands exist only for two reasons:
 
-## 🎮 Core
+1. **Rich-UI dashboards** — list views with inline buttons that the agentic loop won't render the same way (`/inbox`, `/files`, `/reminders`, `/scheduled_emails`, `/projects`, `/me`).
+2. **Control / admin** — operations that should NEVER pass through the LLM (`/reset`, `/model`, `/backup`, `/forget`, `/creds`, `/voice`).
+
+Everything else (drafting emails, generating CVs, fetching URLs, scheduling events, browsing the web, fixing bugs in the bot's own code, creating new GitHub repos…) just works in natural language. The agentic loop has the right primitives.
+
+---
+
+## Slash commands
+
+### Dashboards / rich UI
 
 | Command | What it does |
 |---|---|
-| `/start` | Greeting, quick orientation |
-| `/me` | Show everything stored about you (living profile + projects + skills + jobs + ...) |
-| `/skills` | List every capability the registry knows about |
-| `/settings` | Current LLM provider, scheduled times, integrations on/off |
-| `/usage` | Token usage + estimated cost (input, output, cache reads/writes) |
+| `/me` | Living profile + active projects + top skills + recent jobs |
+| `/projects` | List of structured projects. `/projects <name>` for the full record (description, role, tech, dates, key achievements, raw details). |
+| `/inbox` | Triaged list of unread Gmail (🔴 action / 🟡 personal / 📰 newsletter / • other) with per-message Read / Reply / Archive buttons |
+| `/scheduled_emails` | Pending scheduled sends with cancel buttons |
+| `/reminders` | Pending reminders with cancel buttons |
+| `/files [category]` | Uploaded files grouped by category (📑 contract / 🧾 invoice / 🪪 cv / 🖼 image / 📸 screenshot / 🧑‍🏫 whiteboard / 📝 note / 📂 other). `/files <substring>` filters by name/tag/summary. |
+| `/skills` | Lists every capability the bot exposes |
+| `/tools [Nh]` | 24h dashboard of tool calls — total, failures, breakdown per primitive, recent errors. `/tools 6h` for a 6-hour window. |
+| `/usage` | Token usage + estimated Anthropic cost (input, output, cache reads/writes) |
+| `/settings` | Current provider, briefing time, integrations on/off |
 
-## 🧠 Memory
+### Control
+
+| Command | What it does |
+|---|---|
+| `/start` | Greeting + quick pointers |
+| `/reset` | Forget the current conversation thread (start a fresh agentic session). Auto-resets after 6h idle anyway. |
+| `/model [auto\|haiku\|sonnet\|opus]` | Switch the agentic-loop driver. Default `auto` runs a heuristic per message; the others force a tier. |
+| `/private <message>` | Route a single message through local Ollama (never touches Anthropic). Requires Ollama configured. |
+| `/voice` | Toggle TTS voice replies on/off (requires `OPENAI_API_KEY`) |
+
+### Admin
 
 | Command | What it does |
 |---|---|
 | `/search <query>` | Semantic search across `knowledge`, `conversations`, `documents` |
-| `/projects` | List structured projects with tech + status |
-| `/timeline YYYY-MM-DD` | Reconstruct what was true at that date (jobs, projects, goals) |
 | `/forget <type> <name>` | Delete a structured entity with audit log entry. Types: `project`, `contact`, `skill`, `idea`, `goal`, `memory` |
 | `/export` | Dump full profile JSON, sent as file |
-| `/backup` | Trigger immediate backup tar.gz + off-site upload |
+| `/backup` | Trigger immediate backup tar.gz + off-site upload (Drive/S3/SCP/rclone) |
+| `/creds <get\|set\|list> [args]` | Encrypted credential vault — site logins for the browser agent |
 
-## 📄 Document generation
+---
 
-| Command | What it does |
-|---|---|
-| `/cv` | Generic CV (Markdown + DOCX + PDF) |
-| `/cv_for <job description>` | CV adapted to a specific job posting |
-| `/cv_variants <job description>` | Two style variants; pick winner with inline button to bias future runs |
-| `/email <objective>` | Draft an email; arrives with [Send] [Edit] [Cancel] buttons |
-| `/gap <job description>` | Skill gap analysis: matches, gaps, quick wins, longer plays |
+## Capabilities exposed in natural language
 
-## 💼 Career engine
+Everything below works just by typing. The agentic loop picks the right primitives.
 
-| Command | What it does |
-|---|---|
-| `/onboard` | 13-question guided interview that fills the whole profile |
-| `/prep <role/company>` | STAR-format interview prep using your stored evidence |
-| `/jobs` | List job opportunity pipeline |
-| `/jobs Company \| Role \| status` | Add or update an opportunity (statuses: discovered/applied/interviewing/offer/rejected/withdrawn) |
+### 📧 Email (Gmail)
 
-## 🎯 Coaching & life
+> "mira mi inbox" / "qué hay sin leer importante?"  
+> "lee el de Anthropic" · "abre el #3" · "muéstrame el correo de mi casero"  
+> "redacta un mail a marc@x.com diciendo que llego tarde"  
+> "responde al de Anthropic con que tengo la factura guardada"  
+> "envíalo" → mail programado 10 min con botón cancelar (override `envíalo ya` / `delay_minutes=0`)  
+> "busca correos de Renfe del mes pasado"
 
-| Command | What it does |
-|---|---|
-| `/goal <description>` | Track a new goal with streak detection from natural conversation |
-| `/journal` | Adaptive journaling prompt; reply with `/journal <entry>` to log + score sentiment |
-| `/review` | Run weekly review (wins, stuck, next-week goals, reflection) |
-| `/decisions` | List past decisions with status + outcome |
-| `/decide <situation>` | Recall similar past decisions and reason about the new one |
-| `/books` | Reading list grouped by status (reading/finished/wishlist/abandoned) |
-| `/briefing` | Today's briefing: emails, calendar, pending tasks |
+Primitives: `gmail_list / gmail_read / gmail_search / gmail_send / gmail_archive / gmail_mark_read / gmail_cancel_send`.
 
-## 🤖 Advanced
+### 📅 Calendar (Google)
 
-| Command | What it does |
-|---|---|
-| `/plan <goal>` | Agentic multi-step planner — Claude decomposes the goal and runs skills in sequence |
-| `/agent <goal>` | Alias for `/plan` |
-| `/private <message>` | Route a single message through local Ollama (never touches Anthropic). Requires Ollama configured |
-| `/voice` | Toggle TTS voice replies on/off (requires `OPENAI_API_KEY` for the OpenAI TTS endpoint) |
-| `/graph [filter]` | Render a Mermaid knowledge graph of your projects + contacts + skills + tech |
-| `/evolve <new capability>` | Generate a new skill: AST allowlist → sandbox smoke test → LLM code review → PR on GitHub |
+> "qué tengo esta semana" · "estoy libre el martes a las 4?"  
+> "agéndame una llamada con Marc el jueves a las 10"  
+> "cancela la reunión de mañana" (vía Gmail si la invite vino por email)
 
-## 📬 Email & web
+Primitives: `calendar_list / calendar_create / calendar_check_availability`.
 
-| Command | What it does |
-|---|---|
-| `/inbox` (or `mira mi email`) | Triaged list of unread Gmail (🔴 action / 🟡 personal / 📰 promo) with per-message Read / Reply / Archive buttons |
-| `/read <hint>` (or "lee el de Anthropic") | Open a specific email by reference — resolves against the last `/inbox` listing |
-| `/search_mail <query>` | Natural-language Gmail search; e.g. "busca correos de Renfe del mes pasado" |
-| `/scheduled_emails` | Show emails scheduled to send shortly + cancel buttons |
-| `/email <instruction>` (or "responde al de X") | Draft a new email or a reply; reply mode pulls the original body and threads correctly |
-| `/fetch <url>` | Read a public URL, summarise + index relevant facts into memory |
-| `/browse <goal>` | Vision-driven Chromium browser drives a real session toward the goal |
+### 🧠 Memory
 
-### Email send flow
+> "qué decidí sobre el piso?" · "lo que te conté sobre Atlas"  
+> "guarda que mañana voy a Madrid en avión"  
+> "recuérdame en 3 días que llame al banco"  
+> "quiénes son mis recordatorios pendientes?" → `/reminders`
 
-When you confirm a draft, it doesn't fire instantly. By default it's **scheduled 10 minutes out** so you can cancel from Telegram if something's off. Three options on the draft message:
+Primitives: `memory_search / memory_save / memory_recall_profile / memory_recent_messages / memory_remind / memory_list_reminders / memory_cancel_reminder`.
 
-- 📨 **Send now** — fires immediately
-- ⏰ **Send in 10 min** (default) — scheduled, cancellable
-- 🕐 **Send in 1h** — scheduled, cancellable
+Plus background entity extractor: every non-trivial message you send is parsed in background and structured facts (projects, contacts, decisions, ideas, jobs) are persisted automatically.
 
-Cancel any scheduled send with the inline button on the confirmation message, or run `/scheduled_emails` to see all pending and cancel.
+### 📂 Files
 
-> If the bot restarts before the deadline, the scheduled send is silently dropped — by design, so you can re-review.
+> Sube un PDF, foto, doc → se descarga, transcribe (OCR para fotos), clasifica, indexa, y ejecuta el extractor.  
+> "qué decía el contrato del piso sobre la fianza?" → busca en el corpus  
+> "lista mis facturas de mayo"  
+> "borra el cv duplicado"  
+> "mándame el cv aquí" → te llega como adjunto  
+> "sube el cv a drive"
 
-> **Tip:** since the routing LLM now sees the live capability catalog, you
-> *don't* need to remember any of these. "Mira mis correos sin leer" or
-> "abre LinkedIn y aplica al puesto X" will route to the right skill.
+Primitives: `files_list / files_search / files_get / files_delete / chat_send_file / drive_upload / drive_list / drive_find / drive_create_folder / drive_move / drive_delete / drive_share_link`.
 
-## 🎙 Non-text inputs
+### 🌐 Web
 
-| Input | What happens |
-|---|---|
-| Voice note | Whisper transcribes → routed as a normal text message |
-| PDF/DOCX/TXT/MD/CSV | Text extracted → classified → summarised → chunked + indexed semantically → if it's clearly about you, entities are auto-extracted into structured tables |
-| Image | Claude describes it → indexed in `documents` |
-| Forwarded message | Marked with origin and processed normally |
-| Inline `@OmnimeG_bot <topic>` from any chat | Returns Email draft / LinkedIn post / one-pager directly into that chat |
+> Pegar URL en chat → leído, resumido, indexado  
+> "investiga las small language models 2025"  
+> "lee guidobiosca.com y guárdame lo relevante"
 
-## ⚙️ Inline-button callbacks
+Primitives: `web_fetch / web_search`.
 
-These appear automatically when relevant:
+### 🌐 Browser (vision-driven Chromium)
 
-- `email:send` / `email:edit` / `email:cancel` — after `/email`
-- `cv_pick:<id>` — after `/cv_variants`
-- `evolve:approve` / `evolve:reject` — after `/evolve`
-- `review:keep` / `review:edit` — after `/review`
+> "busca tren Barcelona-Zaragoza mañana 9:00 en renfe"  
+> "abre LinkedIn y aplica al puesto de ML Engineer en Glovo"
+
+Primitive: `browser_agent` (slash equivalent removed; pasalo en lenguaje natural).
+
+### 📓 Notion
+
+> "qué tengo en Notion sobre el TFG?"  
+> "crea una página en Notion bajo X con el resumen del paper"
+
+Primitives: `notion_search / notion_read_page / notion_create_note`.  
+**Setup:** `NOTION_TOKEN` en `.env` + share pages with the integration.
+
+### 🐙 GitHub (multi-repo + self-edit)
+
+> "lista mis repos" · "issues abiertos en omnime" · "crea un issue en trading-bot sobre Y"  
+> "lee el archivo X de mi repo Y"  
+> "crea un repo privado nuevo llamado health-tracker"
+
+Primitives: `github_list_repos / github_read_file / github_search_code / github_list_issues / github_list_pulls / github_create_issue / github_comment_issue / github_create_repo`.
+
+### 🤖 Code work — Claude Code is the default
+
+The bot uses **your Claude Pro/Max subscription** to do real programming work. Free within plan limits.
+
+> "arregla el bug en /files cuando hay >50 archivos"  
+> "añade un comando /weather con Open-Meteo"  
+> "refactoriza browser_agent.py, mantén comportamiento, corre tests"  
+> "explica cómo funciona el flow de auth de Gmail" → análisis sin commit  
+> "crea un proyecto nuevo `health-tracker`: FastAPI + Postgres + webhook Strava"
+
+**Default behavior:** direct push to `main`. Auto-deploy ships the change. Pass *"con PR para revisar"* / *"open a PR"* to switch to PR mode.
+
+Primitives: `claude_code(prompt, repo='self|owner/name', via_pr?, ...)` · `claude_code_new_project(name, prompt, ...)`.  
+Lookup helpers (trivial single-line): `bot_read_source / bot_grep_source / github_read_file / github_search_code`.
+
+**Setup:** see `docs/SETUP.md` (or AGENTS.md) for the one-time `claude login` inside the container.
+
+### 🐍 Code execution
+
+> "cuánto es 15% de 847" · "convierte 230£ a euros con tipo de hoy"  
+> "analiza este CSV que te pasé"
+
+Primitive: `exec_python(code, timeout?)` — sandboxed subprocess (10s default, 30s max, 150MB cap).
+
+### 🛰️ Proactive
+
+The bot can ping you on its own (every 30 min) when something deserves your attention: urgent unread email, calendar event in the next hour, project without recent activity, lingering idea worth revisiting. Bias is toward silence.
+
+Toggle via `PROACTIVE_ENABLED` in `.env`.

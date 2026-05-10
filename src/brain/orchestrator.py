@@ -292,24 +292,20 @@ class Orchestrator:
         if self.skill_registry is None:
             return await self._handle_chat(user_id, message, context)
 
-        # Fast-path: classifier already named the skill. Single-shot dispatch,
-        # no agentic loop, no extra LLM call.
-        if hint and hint.get("skill"):
-            skill = self.skill_registry.get(hint["skill"])
-            if skill is not None:
-                sr = await skill.execute(message=message, context=context)
-                return Response(
-                    text=sr.text,
-                    intent=Intent.TASK,
-                    inline_buttons=sr.inline_buttons,
-                    files=sr.files,
-                    metadata={"skill": skill.name, **sr.metadata},
-                )
-
-        # Slash-command short-circuit: keyword-pick the skill and run it
-        # without burning an LLM round-trip — covers /inbox, /cv, etc.
+        # Slash-command short-circuit ONLY: when the user typed `/inbox`,
+        # `/cv`, etc., dispatch the matching skill directly so we get instant
+        # zero-cost responses with the skill's rich UI. ANY other message
+        # (natural language) goes through the agentic loop so the model can
+        # combine primitives and decide what to do — that's where the magic
+        # happens. We DON'T short-circuit on the classifier's `skill` hint
+        # for non-slash messages anymore: doing that bypassed the loop and
+        # made "mira mis mails" still return the pre-cooked email_inbox UI.
         if message.lstrip().startswith("/"):
-            skill = self.skill_registry.find_best_skill(message, context)
+            skill = None
+            if hint and hint.get("skill"):
+                skill = self.skill_registry.get(hint["skill"])
+            if skill is None:
+                skill = self.skill_registry.find_best_skill(message, context)
             if skill is not None:
                 sr = await skill.execute(message=message, context=context)
                 return Response(
@@ -320,9 +316,7 @@ class Orchestrator:
                     metadata={"skill": skill.name, **sr.metadata},
                 )
 
-        # Natural-language TASK: drive an agentic multi-tool loop with the
-        # mid-tier model. Lets the user compose ('mira inbox y respóndele al
-        # de Anthropic') in a single message.
+        # Natural-language TASK → agentic primitives loop.
         return await self._run_agentic_loop(user_id, message, context)
 
     AGENTIC_MAX_STEPS = 5

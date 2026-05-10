@@ -126,22 +126,45 @@ async def _memory_recall_profile(args: dict, context: "Context") -> str:
         profile = _memory(context).get_user_profile(user_id)
     except Exception as exc:
         return json.dumps({"error": str(exc)})
+    all_projects = profile.get("projects") or []
     return json.dumps({
         "name": profile.get("name"),
         "living_profile": profile.get("living_profile") or "",
         "communication_style": profile.get("communication_style"),
-        "active_projects": [p.get("name") for p in (profile.get("projects") or []) if p.get("status") == "active"],
+        "projects": [
+            {
+                "name": p.get("name"),
+                "status": p.get("status"),
+                "description": (p.get("description") or "")[:300],
+                "technologies": p.get("technologies"),
+                "role": p.get("role"),
+            }
+            for p in all_projects
+        ],
+        "active_projects": [p.get("name") for p in all_projects if (p.get("status") or "").lower() in ("active", "in_progress", "in progress", "ongoing")],
         "top_skills": [s.get("name") for s in (profile.get("skills") or [])[:15]],
         "recent_jobs": [
             {"role": j.get("role"), "company": j.get("company")}
             for j in (profile.get("work_experience") or [])[:5]
+        ],
+        "education": [
+            {"institution": e.get("institution"), "degree": e.get("degree")}
+            for e in (profile.get("education") or [])
         ],
     }, ensure_ascii=False)
 
 
 MEMORY_RECALL_PROFILE = Tool(
     name="memory_recall_profile",
-    description="Get the user's full living profile (who they are, what they're working on, communication style). Use when you need to ground a response in who they are.",
+    description=(
+        "Get the user's full living profile: name, living_profile text, "
+        "communication style, ALL projects (with their status: active / "
+        "completed / paused / etc.), top skills, recent jobs, education. "
+        "Use this when answering 'qué proyectos tengo' / 'qué sabes "
+        "sobre mí' / 'mis skills' / similar. The 'projects' field has "
+        "every project regardless of status; 'active_projects' is a "
+        "convenience subset."
+    ),
     input_schema={"type": "object", "properties": {}, "required": []},
     run=_memory_recall_profile,
 )

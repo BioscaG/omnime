@@ -33,14 +33,27 @@ class GitHubClient:
         content: str,
         message: str,
         branch: str = "main",
+        create_branch_from: str | None = None,
     ) -> dict[str, Any]:
         repo = self._build()
+        if create_branch_from and branch != create_branch_from:
+            self._ensure_branch(branch, create_branch_from)
         try:
             existing = repo.get_contents(path, ref=branch)
             res = repo.update_file(path, message, content, existing.sha, branch=branch)
         except Exception:
             res = repo.create_file(path, message, content, branch=branch)
-        return {"commit": res["commit"].sha, "path": path}
+        return {"commit": res["commit"].sha, "path": path, "branch": branch}
+
+    def _ensure_branch(self, branch: str, source: str) -> None:
+        repo = self._build()
+        try:
+            repo.get_branch(branch)
+            return
+        except Exception:
+            pass
+        src = repo.get_branch(source)
+        repo.create_git_ref(ref=f"refs/heads/{branch}", sha=src.commit.sha)
 
     def open_pr(self, title: str, body: str, head: str, base: str = "main") -> dict[str, Any]:
         repo = self._build()

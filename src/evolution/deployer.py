@@ -1,12 +1,14 @@
-"""Deploy generated skills: write file, hot-reload, optional GitHub commit."""
+"""Deploy generated skills: write file, hot-reload, branch + PR on GitHub."""
 from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from src.config import settings
+from src.evolution.ast_validator import validate
 from src.skills.registry import SkillRegistry
 
 
@@ -23,7 +25,19 @@ class Deployer:
         s = re.sub(r"[^a-z0-9_]+", "_", name.lower()).strip("_")
         return s or "skill"
 
-    def deploy(self, skill_name: str, code: str, push_to_github: bool = False) -> dict[str, Any]:
+    def deploy(
+        self,
+        skill_name: str,
+        code: str,
+        push_to_github: bool = False,
+        open_pr: bool = True,
+    ) -> dict[str, Any]:
+        # Re-validate before writing — sandbox check ran earlier but the file
+        # has not yet been committed to disk; running twice is cheap insurance.
+        report = validate(code)
+        if not report.ok:
+            raise ValueError(f"Generated code failed validation: {report.first_reason}")
+
         slug = self.slug(skill_name)
         path = self.skills_dir / f"{slug}.py"
         if path.exists():
@@ -40,21 +54,42 @@ class Deployer:
 
         commit_info: dict[str, Any] = {}
         if push_to_github:
-            try:
-                from src.integrations.github_client import GitHubClient
-
-                client = GitHubClient()
-                if client.enabled:
-                    commit_info = client.commit_file(
-                        path=f"src/skills/{slug}.py",
-                        content=code,
-                        message=f"Add skill: {skill_name}",
-                    )
-            except Exception as exc:
-                logger.warning("GitHub commit failed: %s", exc)
-                commit_info = {"error": str(exc)}
+            commit_info = self._push_to_github(slug, code, skill_name, open_pr=open_pr)
 
         return {"path": str(path), "slug": slug, "github": commit_info}
+
+    def _push_to_github(self, slug: str, code: str, skill_name: str, open_pr: bool) -> dict[str, Any]:
+        try:
+            from src.integrations.github_client import GitHubClient
+
+            client = GitHubClient()
+            if not client.enabled:
+                return {"skipped": "GitHub not configured"}
+            branch = f"evolve/{slug}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+            commit = client.commit_file(
+                path=f"src/skills/{slug}.py",
+                content=code,
+                message=f"Add skill: {skill_name}",
+                branch=branch,
+                create_branch_from="main",
+            )
+            info: dict[str, Any] = {"branch": branch, **commit}
+            if open_pr:
+                pr = client.open_pr(
+                    title=f"[evolve] {skill_name}",
+                    body=(
+                        f"Auto-generated skill `{slug}` via /evolve.\n\n"
+                        "AST allowlist passed; sandbox smoke test passed.\n"
+                        "Review the file before merging."
+                    ),
+                    head=branch,
+                    base="main",
+                )
+                info["pr"] = pr
+            return info
+        except Exception as exc:
+            logger.warning("GitHub push failed: %s", exc)
+            return {"error": str(exc)}
 
     @staticmethod
     def _load_module(slug: str):

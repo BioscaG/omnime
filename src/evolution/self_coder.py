@@ -31,7 +31,12 @@ Constraints:
 - Implement async def execute(self, message, context) -> SkillResponse.
 - Implement def can_handle(self, message, intent=None) -> float.
 - Set: name, description, triggers (class attributes).
-- No `import os.system` or arbitrary shell calls. No network unless required for the task.
+- ALLOWED imports only: src.skills.base, src.brain.llm_client,
+  src.brain.context_builder, src.memory.manager, dataclasses, datetime,
+  json, logging, math, re, typing, pathlib, enum, functools, itertools,
+  collections, abc, asyncio, uuid, hashlib, base64, textwrap, string,
+  statistics. No os, subprocess, urllib, requests, httpx, socket, ctypes.
+- No eval, exec, compile, __import__, open, input, breakpoint.
 - Keep dependencies to ones already in requirements.txt.
 - Return only Python code, no preamble, no fences.
 
@@ -45,12 +50,30 @@ User context:
 """
 
 
+CODE_REVIEW_PROMPT = """Review the following candidate skill module for OMNIME.
+Reject if:
+- It exfiltrates secrets, hits the network outside `llm` calls, writes outside data dirs.
+- It contains unjustified open(), eval(), exec(), or shell-like behaviour.
+- It silently catches and ignores all exceptions in the main path.
+- It does not honour the BaseSkill interface.
+
+Otherwise approve. Reply STRICTLY in JSON:
+{{"approved": bool, "issues": [str], "summary": str}}
+
+Code:
+```python
+{code}
+```
+"""
+
+
 @dataclass
 class PendingSkill:
     name: str
     code: str
     summary: str
     smoke: dict[str, Any] = field(default_factory=dict)
+    review: dict[str, Any] = field(default_factory=dict)
 
 
 class EvolutionEngine:
@@ -101,8 +124,21 @@ class EvolutionEngine:
                 intent=Intent.EVOLVE,
             )
 
+        review = await self._code_review(code)
+        if not review.get("approved", False):
+            issues = "\n".join(f"- {i}" for i in review.get("issues", []))
+            return Response(
+                text=(
+                    "Code review flagged issues; not installing.\n"
+                    f"{issues or 'No specifics returned.'}"
+                ),
+                intent=Intent.EVOLVE,
+            )
+
         skill_name = (smoke.get("classes") or ["NewSkill"])[0]
-        pending = PendingSkill(name=skill_name, code=code, summary=request, smoke=smoke)
+        pending = PendingSkill(
+            name=skill_name, code=code, summary=request, smoke=smoke, review=review,
+        )
         self._pending[user_id] = pending
 
         preview = code[:1500] + ("\n# ...truncated..." if len(code) > 1500 else "")
@@ -122,14 +158,23 @@ class EvolutionEngine:
             metadata={"skill_name": skill_name},
         )
 
-    async def approve_pending(self, user_id: int, push_to_github: bool = False) -> str:
+    async def approve_pending(self, user_id: int, push_to_github: bool = True) -> str:
         pending = self._pending.pop(user_id, None)
         if pending is None:
             return "No pending skill to approve."
         result = self.deployer.deploy(
-            skill_name=pending.name, code=pending.code, push_to_github=push_to_github,
+            skill_name=pending.name,
+            code=pending.code,
+            push_to_github=push_to_github,
+            open_pr=True,
         )
-        return f"Installed at {result['path']}, reloaded into registry."
+        msg = f"Installed at {result['path']}, reloaded into registry."
+        gh = result.get("github") or {}
+        if pr := gh.get("pr"):
+            msg += f"\nPR opened: {pr.get('url')}"
+        elif gh.get("branch"):
+            msg += f"\nPushed to branch {gh['branch']}"
+        return msg
 
     def reject_pending(self, user_id: int) -> Optional[PendingSkill]:
         return self._pending.pop(user_id, None)
@@ -139,3 +184,24 @@ class EvolutionEngine:
         s = s.strip()
         m = re.match(r"^```(?:python)?\s*(.*?)\s*```$", s, re.S)
         return m.group(1) if m else s
+
+    async def _code_review(self, code: str) -> dict[str, Any]:
+        import json
+
+        try:
+            raw = await self.llm.complete(
+                prompt=CODE_REVIEW_PROMPT.format(code=code[:5000]),
+                system="You are a careful security-minded code reviewer.",
+                model_tier="powerful",
+                max_tokens=600,
+            )
+        except Exception as exc:
+            logger.warning("Code review LLM call failed: %s", exc)
+            return {"approved": False, "issues": [f"review unavailable: {exc}"], "summary": ""}
+
+        raw = self._strip_fences(raw)
+        try:
+            return json.loads(raw)
+        except Exception:
+            logger.warning("Could not parse code review response: %s", raw[:300])
+            return {"approved": False, "issues": ["malformed review JSON"], "summary": ""}

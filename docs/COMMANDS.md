@@ -71,9 +71,25 @@ know what you want.
 
 | Command | What it does |
 |---|---|
-| `/inbox` (or `mira mi email`) | List + summarise unread Gmail messages. Requires `GMAIL_*` env vars |
+| `/inbox` (or `mira mi email`) | Triaged list of unread Gmail (🔴 action / 🟡 personal / 📰 promo) with per-message Read / Reply / Archive buttons |
+| `/read <hint>` (or "lee el de Anthropic") | Open a specific email by reference — resolves against the last `/inbox` listing |
+| `/search_mail <query>` | Natural-language Gmail search; e.g. "busca correos de Renfe del mes pasado" |
+| `/scheduled_emails` | Show emails scheduled to send shortly + cancel buttons |
+| `/email <instruction>` (or "responde al de X") | Draft a new email or a reply; reply mode pulls the original body and threads correctly |
 | `/fetch <url>` | Read a public URL, summarise + index relevant facts into memory |
 | `/browse <goal>` | Vision-driven Chromium browser drives a real session toward the goal |
+
+### Email send flow
+
+When you confirm a draft, it doesn't fire instantly. By default it's **scheduled 10 minutes out** so you can cancel from Telegram if something's off. Three options on the draft message:
+
+- 📨 **Send now** — fires immediately
+- ⏰ **Send in 10 min** (default) — scheduled, cancellable
+- 🕐 **Send in 1h** — scheduled, cancellable
+
+Cancel any scheduled send with the inline button on the confirmation message, or run `/scheduled_emails` to see all pending and cancel.
+
+> If the bot restarts before the deadline, the scheduled send is silently dropped — by design, so you can re-review.
 
 > **Tip:** since the routing LLM now sees the live capability catalog, you
 > *don't* need to remember any of these. "Mira mis correos sin leer" or

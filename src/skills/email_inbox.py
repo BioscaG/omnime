@@ -1,17 +1,17 @@
-"""Read-side counterpart to ``email_composer``: lists unread Gmail messages
-and (with a follow-up) summarises a specific thread.
-
-Disabled when Gmail OAuth credentials aren't set — in that case the skill
-hides itself from the capability catalog so the LLM doesn't promise something
-it can't deliver.
+"""List + summarise unread Gmail messages, with inline actions per message
+and lightweight triage by category. Caches the listing in
+``email_state`` so other email skills (read, reply, search) can resolve
+references like "el de Anthropic".
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 
-from src.integrations.gmail_client import GmailClient
+from src.integrations.gmail_client import GmailClient, is_noreply
 from src.skills.base import BaseSkill, SkillResponse
+from src.skills.email_state import InboxItem, remember_inbox
 
 if TYPE_CHECKING:
     from src.brain.context_builder import Context
@@ -22,21 +22,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-SUMMARY_PROMPT = """You're triaging the user's inbox. For each message below
-output exactly one bullet:
-- **From** — *Subject* — one-sentence gist of why it matters.
+CATEGORIES = ("action", "personal", "newsletter", "other")
 
-Skip newsletters and marketing unless they're flagged urgent. If everything
-is noise, just say "Nothing important — only newsletters/promos."
+TRIAGE_PROMPT = """Classify each email into ONE of: action | personal | newsletter | other.
+Rules:
+- "action" = needs a human reply, a decision, or a task. Bills, calendar invites, recruiter pings, customer questions.
+- "personal" = friends/family/1:1 with a real human, no action needed urgently.
+- "newsletter" = digests, marketing, automated transactional (receipts, security alerts), no-reply senders.
+- "other" = nothing else fits.
 
-Messages:
-{messages}
+Output ONLY a JSON object: {{"<id>": "category", ...}} with no commentary.
+
+Emails:
+{emails}
 """
+
+CATEGORY_ICON = {
+    "action": "🔴",
+    "personal": "🟡",
+    "newsletter": "📰",
+    "other": "•",
+}
 
 
 class EmailInboxSkill(BaseSkill):
     name = "email_inbox"
-    description = "Read your Gmail inbox: list unread, summarise what matters, surface anything time-sensitive."
+    description = "Read your Gmail inbox: list unread, triage by importance, summarise what matters, surface anything time-sensitive."
     triggers = [
         "/inbox", "/mail", "/email_check", "/correos",
         "check my email", "check my inbox", "any new email",
@@ -99,23 +110,75 @@ class EmailInboxSkill(BaseSkill):
                 metadata={"skill": self.name, "count": 0},
             )
 
-        rendered = "\n".join(
-            f"- From: {m.get('from')} | Subject: {m.get('subject')} | "
-            f"Snippet: {(m.get('snippet') or '')[:200]}"
+        # Triage in one shot via Haiku.
+        categories = await self._triage(unread)
+
+        items = [
+            InboxItem(
+                id=m.get("id"),
+                thread_id=m.get("thread_id"),
+                sender=m.get("from") or "",
+                subject=m.get("subject") or "(no subject)",
+                snippet=m.get("snippet") or "",
+                date=m.get("date") or "",
+                category=categories.get(m.get("id"), "other"),
+            )
             for m in unread
-        )
-        summary = await self.llm.complete(
-            prompt=SUMMARY_PROMPT.format(messages=rendered),
-            system="You are a fast, ruthless inbox triager.",
-            model_tier="fast",
-            max_tokens=600,
-        )
-        header = f"**📬 {len(unread)} unread**\n\n"
+        ]
+        user_id = getattr(context, "user_id", 0) or 0
+        remember_inbox(int(user_id), items)
+
+        # Render: group by category, numbered for natural-language reference.
+        lines = [f"**📬 {len(items)} unread** — tap a message or say _\"reply to the one from X\"_:\n"]
+        for i, it in enumerate(items, 1):
+            icon = CATEGORY_ICON.get(it.category, "•")
+            tag = " · _no-reply_" if is_noreply(it.sender) else ""
+            sender_short = (it.sender or "").split("<")[0].strip().strip('"') or "(unknown)"
+            subj = (it.subject or "")[:80]
+            lines.append(f"{icon} **{i}.** {sender_short} — *{subj}*{tag}")
+            if it.snippet:
+                lines.append(f"     _{it.snippet[:140]}_")
+
+        # Inline buttons: 1-row of quick actions per email (max 5 to fit Telegram)
+        buttons: list[list[dict[str, str]]] = []
+        for i, it in enumerate(items[:5], 1):
+            buttons.append([
+                {"text": f"📖 Read #{i}", "callback_data": f"email:read:{it.id}"},
+                {"text": f"↩️ Reply #{i}", "callback_data": f"email:reply:{it.id}"},
+                {"text": f"🗑 Archive #{i}", "callback_data": f"email:archive:{it.id}"},
+            ])
+
         return SkillResponse(
-            text=header + summary.strip(),
+            text="\n".join(lines),
+            inline_buttons=buttons,
             metadata={
                 "skill": self.name,
-                "count": len(unread),
-                "ids": [m.get("id") for m in unread],
+                "count": len(items),
+                "ids": [it.id for it in items],
             },
         )
+
+    async def _triage(self, messages: list[dict]) -> dict[str, str]:
+        try:
+            payload = "\n".join(
+                f"- id={m.get('id')} | from={m.get('from')} | subject={m.get('subject')} "
+                f"| snippet={(m.get('snippet') or '')[:160]}"
+                for m in messages
+            )
+            raw = await self.llm.complete(
+                prompt=TRIAGE_PROMPT.format(emails=payload),
+                system="You output strict JSON. No prose.",
+                model_tier="tiny",
+                max_tokens=400,
+                temperature=0.0,
+            )
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.strip("`")
+                if raw.lower().startswith("json"):
+                    raw = raw[4:]
+            data = json.loads(raw)
+            return {k: v for k, v in data.items() if v in CATEGORIES}
+        except Exception as exc:
+            logger.debug("triage failed, defaulting all to 'other': %s", exc)
+            return {}

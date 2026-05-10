@@ -104,7 +104,7 @@ ROUTING_TOOLS: list[ToolDef] = _STATIC_ROUTING_TOOLS + [
 _FASTPATH_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
     (Intent.EVOLVE, re.compile(r"^\s*evolve[:\s]", re.I)),
     (Intent.EVOLVE, re.compile(r"\b(add the ability|teach yourself|new skill|learn how)\b", re.I)),
-    (Intent.TASK, re.compile(r"^/(cv|cv_for|email|inbox|mail|briefing|research|review|code|fetch|url|scrape|browse)\b", re.I)),
+    (Intent.TASK, re.compile(r"^/(cv|cv_for|email|inbox|mail|read|search_mail|scheduled_emails|briefing|research|review|code|fetch|url|scrape|browse)\b", re.I)),
     (Intent.TASK, re.compile(r"^https?://", re.I)),
     # Natural-language URL share: "aquí tienes mi web https://...", etc.
     (Intent.TASK, re.compile(r"\b(https?://|www\.)\S+\.\S+", re.I)),

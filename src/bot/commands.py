@@ -122,6 +122,53 @@ async def cmd_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_skill(update, context, "email_inbox", text)
 
 
+async def cmd_read_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Open and summarise a specific email by reference or hint."""
+    text = update.effective_message.text or "/read"
+    await _run_skill(update, context, "email_read", text)
+
+
+async def cmd_search_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Search Gmail with natural language."""
+    text = update.effective_message.text or "/search_mail"
+    await _run_skill(update, context, "email_search", text)
+
+
+async def cmd_scheduled_emails(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List emails scheduled to send shortly, with cancel buttons."""
+    if not await authorize(update, context):
+        return
+    user_id_db = context.application.bot_data["user_id_db"]
+    from src.skills.email_state import list_scheduled
+    import time as _time
+
+    pending = list_scheduled(user_id_db)
+    if not pending:
+        await safe_send(update.effective_message.reply_text, "No scheduled emails.")
+        return
+    lines = ["**⏰ Scheduled emails:**"]
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    keyboard: list[list[InlineKeyboardButton]] = []
+    for rec in pending:
+        eta = max(0, int(rec.deadline - _time.time()))
+        mins = eta // 60
+        secs = eta % 60
+        lines.append(
+            f"- → **{rec.draft.get('to')}** · *{rec.draft.get('subject')}* "
+            f"_(in {mins}m {secs}s)_"
+        )
+        keyboard.append([InlineKeyboardButton(
+            f"❌ Cancel → {rec.draft.get('to')}",
+            callback_data=f"email:scheduled_cancel:{rec.id}",
+        )])
+    await update.effective_message.reply_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
+    )
+
+
 async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await authorize(update, context):
         return

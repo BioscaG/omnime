@@ -122,6 +122,8 @@ def _register_default_skills(registry: SkillRegistry) -> None:
     from src.skills.web_fetch import WebFetchSkill
     from src.skills.browser_agent import BrowserAgentSkill
     from src.skills.email_inbox import EmailInboxSkill
+    from src.skills.email_read import EmailReadSkill
+    from src.skills.email_search import EmailSearchSkill
 
     for cls in (
         CVGeneratorSkill,
@@ -145,6 +147,8 @@ def _register_default_skills(registry: SkillRegistry) -> None:
         WebFetchSkill,
         BrowserAgentSkill,
         EmailInboxSkill,
+        EmailReadSkill,
+        EmailSearchSkill,
     ):
         try:
             registry.register(cls(registry.llm, registry.memory))

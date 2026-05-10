@@ -135,6 +135,27 @@ class SemanticStore:
         if col is not None:
             col.delete(ids=[doc_id])
 
+    def delete_where(self, collection: str, where: dict) -> None:
+        """Delete every entry matching the where filter (e.g. all chunks
+        of a single file). Used by file/entity deletion to clean up the
+        vector index alongside the structured row."""
+        if not self._available:
+            entries = self._fallback.get(collection, [])
+            self._fallback[collection] = [
+                e for e in entries
+                if not all(
+                    (e.get("metadata") or {}).get(k) == v
+                    for k, v in where.items()
+                )
+            ]
+            return
+        col = self._collections.get(collection)
+        if col is not None:
+            try:
+                col.delete(where=where)
+            except Exception as exc:
+                logger.warning("delete_where(%s, %s) failed: %s", collection, where, exc)
+
     def count(self, collection: str) -> int:
         if not self._available:
             return len(self._fallback.get(collection, []))

@@ -257,10 +257,37 @@ class StructuredStore:
 
     # --- Files -----------------------------------------------------------
     def add_file(self, user_id: int, **data: Any) -> m.FileRecord:
-        f = m.FileRecord(user_id=user_id, **{k: v for k, v in data.items() if v is not None})
+        """Upsert a file record. Telegram returns the same `file_id` for
+        identical re-uploads, so we use that as the dedup key. When a
+        file already exists for this user with the same telegram_file_id,
+        we update its metadata in place instead of creating a duplicate row."""
+        cleaned = {k: v for k, v in data.items() if v is not None}
+        tg_id = cleaned.get("telegram_file_id")
+        existing = None
+        if tg_id:
+            existing = self.session.execute(
+                select(m.FileRecord)
+                .where(m.FileRecord.user_id == user_id)
+                .where(m.FileRecord.telegram_file_id == tg_id)
+            ).scalar_one_or_none()
+        if existing is not None:
+            for k, v in cleaned.items():
+                setattr(existing, k, v)
+            self.session.flush()
+            return existing
+        f = m.FileRecord(user_id=user_id, **cleaned)
         self.session.add(f)
         self.session.flush()
         return f
+
+    def find_file_by_telegram_id(self, user_id: int, telegram_file_id: str) -> m.FileRecord | None:
+        if not telegram_file_id:
+            return None
+        return self.session.execute(
+            select(m.FileRecord)
+            .where(m.FileRecord.user_id == user_id)
+            .where(m.FileRecord.telegram_file_id == telegram_file_id)
+        ).scalar_one_or_none()
 
     # --- Summaries -------------------------------------------------------
     def add_summary(

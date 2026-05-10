@@ -171,5 +171,83 @@ FILES_GET = Tool(
 )
 
 
+async def _files_delete(args: dict, context: "Context") -> str:
+    fid = args.get("id")
+    if fid is None:
+        return json.dumps({"error": "id is required"})
+    user_id = int(getattr(context, "user_id", 0) or 0)
+    try:
+        from pathlib import Path
+        from src.config import settings as _settings
+        from src.skills.registry import get_registry
+
+        with session_scope() as s:
+            r = s.execute(
+                select(m.FileRecord)
+                .where(m.FileRecord.id == int(fid))
+                .where(m.FileRecord.user_id == user_id)
+            ).scalar_one_or_none()
+            if r is None:
+                return json.dumps({"error": f"file {fid} not found"})
+
+            filename = r.filename
+            metadata = dict(r.extra_metadata or {})
+            metadata["filename"] = filename
+
+            # Drop ChromaDB chunks for this file.
+            try:
+                memory = get_registry().memory
+                memory.semantic.delete_where(
+                    collection="documents",
+                    where={"user_id": user_id, "filename": filename or ""},
+                )
+            except Exception as exc:
+                logger.warning("ChromaDB chunk delete failed for %s: %s", filename, exc)
+
+            # Drop the file from disk if it exists.
+            try:
+                disk_path = Path(_settings.uploads_dir) / (filename or "")
+                if disk_path.exists():
+                    disk_path.unlink()
+            except Exception as exc:
+                logger.warning("Disk file delete failed for %s: %s", filename, exc)
+
+            s.delete(r)
+
+            # Audit row.
+            try:
+                s.add(m.AuditLog(
+                    user_id=user_id,
+                    action="delete",
+                    entity_type="file",
+                    entity_id=int(fid),
+                    details={"filename": filename, **metadata},
+                ))
+            except Exception as exc:
+                logger.debug("audit log write failed: %s", exc)
+
+        return json.dumps({"status": "deleted", "id": int(fid), "filename": filename})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+FILES_DELETE = Tool(
+    name="files_delete",
+    description=(
+        "Delete an uploaded file by id — removes the FileRecord, the "
+        "ChromaDB chunks, and the file from disk. Audit-logged. ONLY "
+        "call this when the user EXPLICITLY asks to delete the file "
+        "('elimina', 'borra', 'delete'); never as a side effect of "
+        "another instruction."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"id": {"type": "integer"}},
+        "required": ["id"],
+    },
+    run=_files_delete,
+)
+
+
 def build_files_tools() -> list[Tool]:
-    return [FILES_LIST, FILES_SEARCH, FILES_GET]
+    return [FILES_LIST, FILES_SEARCH, FILES_GET, FILES_DELETE]

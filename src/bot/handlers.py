@@ -197,15 +197,39 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     chat = update.effective_chat
     await chat.send_chat_action(ChatAction.UPLOAD_DOCUMENT)
     doc = msg.document
+
+    memory = context.application.bot_data["memory"]
+    user_id_db = context.application.bot_data["user_id_db"]
+    llm = context.application.bot_data["llm"]
+
+    # Dedup: Telegram returns the same file_id for identical re-uploads.
+    # If we already have this file_id for this user, skip the heavy work
+    # and just acknowledge.
+    from src.memory.db import session_scope
+    from src.memory.structured import StructuredStore
+
+    existing_summary: str | None = None
+    existing_id: int | None = None
+    with session_scope() as s:
+        existing = StructuredStore(s).find_file_by_telegram_id(user_id_db, doc.file_id)
+        if existing is not None:
+            existing_summary = existing.summary or "(saved earlier)"
+            existing_id = existing.id
+
+    if existing_id is not None:
+        await safe_send(
+            chat.send_message,
+            f"📄 Already have this one — _{doc.file_name}_ (id #{existing_id}). "
+            f"Skipping re-processing.\n\n{(existing_summary or '')[:400]}",
+        )
+        return
+
     file = await doc.get_file()
     settings.uploads_dir.mkdir(parents=True, exist_ok=True)
     path = settings.uploads_dir / (doc.file_name or f"doc_{msg.message_id}")
     await file.download_to_drive(path)
 
     extracted = await asyncio.to_thread(_extract_text, path)
-    memory = context.application.bot_data["memory"]
-    user_id_db = context.application.bot_data["user_id_db"]
-    llm = context.application.bot_data["llm"]
 
     if not extracted:
         await safe_send(chat.send_message, f"📄 Stored **{doc.file_name}** (no text extracted).")

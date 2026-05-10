@@ -16,7 +16,8 @@ def test_system_blocks_marks_cache_control():
 
 def test_system_blocks_omitted_when_disabled():
     blocks = LLMClient._system_blocks("hi", cache_system=False)
-    assert blocks == [{"type": "text", "text": "hi"}]
+    # When caching is disabled, system is sent as a plain string (cheaper, less metadata).
+    assert blocks == "hi"
 
 
 def test_estimate_cost_returns_zero_for_unknown_model():
@@ -26,12 +27,23 @@ def test_estimate_cost_returns_zero_for_unknown_model():
 def test_estimate_cost_honours_cache_pricing():
     """1M cache-read tokens should be markedly cheaper than 1M fresh-input tokens."""
     cache_only = LLMClient._estimate_cost(
-        "claude-sonnet-4-20250514", inp=0, out=0, cw=0, cr=1_000_000
+        "claude-sonnet-4-6", inp=0, out=0, cw=0, cr=1_000_000
     )
     fresh_only = LLMClient._estimate_cost(
-        "claude-sonnet-4-20250514", inp=1_000_000, out=0, cw=0, cr=0
+        "claude-sonnet-4-6", inp=1_000_000, out=0, cw=0, cr=0
     )
     assert cache_only < fresh_only
+
+
+def test_haiku_cheaper_than_sonnet_for_input():
+    """Haiku tier should be markedly cheaper than Sonnet for the same workload."""
+    sonnet = LLMClient._estimate_cost(
+        "claude-sonnet-4-6", inp=1_000_000, out=0, cw=0, cr=0
+    )
+    haiku = LLMClient._estimate_cost(
+        "claude-haiku-4-5-20251001", inp=1_000_000, out=0, cw=0, cr=0
+    )
+    assert haiku < sonnet / 2
 
 
 def test_tooldef_input_schema_passthrough():

@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     llm_model_powerful: str = Field(
         default="claude-opus-4-7", alias="LLM_MODEL_POWERFUL"
     )
+    # Tiny / cheap tier: intent classification, sentiment, lightweight extraction.
+    llm_model_tiny: str = Field(
+        default="claude-haiku-4-5-20251001", alias="LLM_MODEL_TINY"
+    )
     llm_fallback_provider: Optional[Literal["anthropic", "openai", "ollama"]] = Field(
         default=None, alias="LLM_FALLBACK_PROVIDER"
     )

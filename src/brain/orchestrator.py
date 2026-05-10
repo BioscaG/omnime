@@ -86,8 +86,18 @@ _FASTPATH_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
     (Intent.EVOLVE, re.compile(r"\b(add the ability|teach yourself|new skill|learn how)\b", re.I)),
     (Intent.TASK, re.compile(r"^/(cv|cv_for|email|briefing|research|review|code)\b", re.I)),
     (Intent.QUERY, re.compile(r"^\s*(what|who|when|where|which|how many) (did|do|are|is|was) i\b", re.I)),
+    (Intent.QUERY, re.compile(r"^\s*(qué|quién|cuándo|dónde|cuáles|cuántos) (hice|tengo|son|fue|trabajé)\b", re.I)),
     (Intent.QUERY, re.compile(r"^/search\b", re.I)),
 ]
+
+
+# Trivial chat patterns — single words, greetings, acknowledgements. We dispatch
+# these straight to CHAT to skip the routing LLM call entirely.
+_TRIVIAL_CHAT = re.compile(
+    r"^\s*(hola|hi|hey|hello|buenos? (días|tardes|noches)|gracias|thanks|ok|vale|si|sí|no|"
+    r"jaja|jeje|lol|👋|😀|🙂)\W*$",
+    re.I,
+)
 
 
 @dataclass
@@ -119,24 +129,28 @@ class Orchestrator:
         message: str,
         context: Context | None = None,
     ) -> tuple[Intent, dict[str, Any]]:
-        # 1. Fast-path: cheap regex hits return immediately, no LLM call.
+        # 1. Trivial greetings / acknowledgements go straight to CHAT.
+        if _TRIVIAL_CHAT.match(message):
+            return Intent.CHAT, {"source": "trivial"}
+
+        # 2. Regex fast-path for obvious slash commands and patterns.
         for intent, pattern in _FASTPATH_PATTERNS:
             if pattern.search(message):
                 return intent, {"source": "regex"}
 
-        # 2. Tool-use routing (provider-aware).
+        # 3. Tool-use routing — uses the cheap "tiny" tier (Haiku) by default.
         ctx_block = context.to_prompt_block() if context else "(none)"
         try:
             result = await self.llm.use_tools(
                 prompt=(
                     "Pick the right tool to handle this user message.\n\n"
-                    f"Recent context:\n{ctx_block[:2000]}\n\n"
+                    f"Recent context:\n{ctx_block[:1500]}\n\n"
                     f'User message: "{message}"'
                 ),
                 tools=ROUTING_TOOLS,
                 system="You route messages by selecting exactly one tool.",
-                model_tier="fast",
-                max_tokens=200,
+                model_tier="tiny",
+                max_tokens=150,
                 temperature=0.0,
                 tool_choice="any",
             )

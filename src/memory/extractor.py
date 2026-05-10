@@ -169,7 +169,7 @@ class EntityExtractor:
             raw = await self.llm.complete(
                 prompt=prompt,
                 system="You return only valid JSON, nothing else.",
-                model_tier="fast",
+                model_tier="tiny",
                 max_tokens=2000,
             )
         except Exception as exc:

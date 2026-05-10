@@ -23,7 +23,7 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 
-ModelTier = Literal["fast", "powerful"]
+ModelTier = Literal["tiny", "fast", "powerful"]
 
 
 @dataclass
@@ -64,13 +64,17 @@ class TokenUsage:
 # Indicative pricing per 1M tokens (USD). Update freely; only used to estimate
 # the cost displayed by /usage. Not authoritative.
 PRICING: dict[str, dict[str, float]] = {
-    "claude-opus-4-20250514": {
+    "claude-opus-4-7": {
         "input": 15.0, "output": 75.0,
         "cache_write": 18.75, "cache_read": 1.5,
     },
-    "claude-sonnet-4-20250514": {
+    "claude-sonnet-4-6": {
         "input": 3.0, "output": 15.0,
         "cache_write": 3.75, "cache_read": 0.3,
+    },
+    "claude-haiku-4-5-20251001": {
+        "input": 1.0, "output": 5.0,
+        "cache_write": 1.25, "cache_read": 0.10,
     },
 }
 
@@ -116,6 +120,7 @@ class LLMClient:
         provider: Optional[str] = None,
         model_fast: Optional[str] = None,
         model_powerful: Optional[str] = None,
+        model_tiny: Optional[str] = None,
         fallback_provider: Optional[str] = None,
         fallback_model: Optional[str] = None,
         cache_ttl: int = 60 * 10,
@@ -124,6 +129,7 @@ class LLMClient:
         self.provider = provider or settings.llm_provider
         self.model_fast = model_fast or settings.llm_model_fast
         self.model_powerful = model_powerful or settings.llm_model_powerful
+        self.model_tiny = model_tiny or settings.llm_model_tiny
         self.fallback_provider = fallback_provider or settings.llm_fallback_provider
         self.fallback_model = fallback_model or settings.llm_fallback_model
         self.usage = TokenUsage()
@@ -288,7 +294,11 @@ class LLMClient:
 
     # --- Internals -----------------------------------------------------
     def _model_for(self, tier: ModelTier) -> str:
-        return self.model_powerful if tier == "powerful" else self.model_fast
+        if tier == "powerful":
+            return self.model_powerful
+        if tier == "tiny":
+            return self.model_tiny
+        return self.model_fast
 
     @staticmethod
     def _cache_key(*parts: Any) -> str:

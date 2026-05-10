@@ -73,27 +73,22 @@ def _check_drive() -> tuple[bool, str | None]:
         return False, f"Drive: {exc}"
 
 
-def _check_notion() -> tuple[bool, str | None]:
+async def _check_notion() -> tuple[bool, str | None]:
     from src.integrations.notion_client import NotionClient
 
     client = NotionClient()
     if not client.enabled:
         return True, None
     try:
-        # Notion's search returns within a few hundred ms on a workspace
-        # of any reasonable size and validates the token.
-        import asyncio
-
-        async def _go():
-            try:
-                await client.search("", page_size=1)
-            finally:
-                await client.aclose()
-
-        asyncio.run(_go())
+        await client.search("", page_size=1)
         return True, None
     except Exception as exc:
         return False, f"Notion: {exc}"
+    finally:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
 
 
 def _check_github() -> tuple[bool, str | None]:
@@ -112,20 +107,15 @@ def _check_github() -> tuple[bool, str | None]:
         return False, f"GitHub: {exc}"
 
 
-def _check_anthropic() -> tuple[bool, str | None]:
+async def _check_anthropic() -> tuple[bool, str | None]:
     """Trivial Haiku call to verify the API key is alive + has credit."""
     if not settings.anthropic_api_key:
         return True, None
     try:
-        import asyncio
-
         from src.brain.llm_client import LLMClient
 
-        async def _go():
-            llm = LLMClient(provider="anthropic")
-            await llm.complete(prompt="reply 'ok'", model_tier="tiny", max_tokens=5)
-
-        asyncio.run(_go())
+        llm = LLMClient(provider="anthropic")
+        await llm.complete(prompt="reply 'ok'", model_tier="tiny", max_tokens=5)
         return True, None
     except Exception as exc:
         return False, f"Anthropic: {exc}"
@@ -144,11 +134,17 @@ CHECKS: list[tuple[str, Any]] = [
 async def run_health_check(application) -> dict[str, Any]:
     """One pass through every integration. Pings the user (with 24h
     cooldown per integration) when something fails."""
+    import inspect as _inspect
+
     results: dict[str, Any] = {}
     failed: list[tuple[str, str]] = []
     for name, fn in CHECKS:
         try:
-            ok, msg = fn()
+            res = fn()
+            if _inspect.isawaitable(res):
+                ok, msg = await res
+            else:
+                ok, msg = res
         except Exception as exc:
             ok, msg = False, f"{name}: check itself errored: {exc}"
         results[name] = {"ok": ok, "error": msg}

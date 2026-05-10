@@ -1,11 +1,13 @@
-"""Multi-provider LLM client with retries, fallback and tier-based model selection."""
+"""Multi-provider LLM client with retries, fallback, prompt caching and tool use."""
 from __future__ import annotations
 
-import asyncio
+import base64
 import hashlib
+import json
 import logging
-from dataclasses import dataclass
-from typing import Any, AsyncIterator, Iterable, Literal, Optional
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, AsyncIterator, Literal, Optional
 
 from cachetools import TTLCache
 from tenacity import (
@@ -28,12 +30,71 @@ ModelTier = Literal["fast", "powerful"]
 class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
     calls: int = 0
+    cost_usd: float = 0.0
 
-    def add(self, inp: int, out: int) -> None:
+    def add(
+        self,
+        inp: int,
+        out: int,
+        cache_creation: int = 0,
+        cache_read: int = 0,
+        cost: float = 0.0,
+    ) -> None:
         self.input_tokens += inp
         self.output_tokens += out
+        self.cache_creation_tokens += cache_creation
+        self.cache_read_tokens += cache_read
         self.calls += 1
+        self.cost_usd += cost
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_creation_tokens": self.cache_creation_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "calls": self.calls,
+            "cost_usd": round(self.cost_usd, 4),
+        }
+
+
+# Indicative pricing per 1M tokens (USD). Update freely; only used to estimate
+# the cost displayed by /usage. Not authoritative.
+PRICING: dict[str, dict[str, float]] = {
+    "claude-opus-4-20250514": {
+        "input": 15.0, "output": 75.0,
+        "cache_write": 18.75, "cache_read": 1.5,
+    },
+    "claude-sonnet-4-20250514": {
+        "input": 3.0, "output": 15.0,
+        "cache_write": 3.75, "cache_read": 0.3,
+    },
+}
+
+
+@dataclass
+class ToolDef:
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    cache_control: bool = False
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+@dataclass
+class ToolUseResult:
+    text: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    stop_reason: Optional[str] = None
 
 
 class LLMError(Exception):
@@ -43,8 +104,11 @@ class LLMError(Exception):
 class LLMClient:
     """Provider-agnostic LLM client.
 
-    Supports anthropic, openai and ollama. Retries with exponential backoff,
-    falls back to a secondary provider on terminal failure, and tracks token usage.
+    Supports anthropic, openai and ollama. Adds:
+      - prompt caching for the system block (Anthropic ephemeral cache)
+      - tool use for structured routing
+      - streaming text iterator
+      - per-call cost estimation
     """
 
     def __init__(
@@ -74,7 +138,20 @@ class LLMClient:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         cache: bool = False,
+        cache_system: bool = True,
+        force_provider: str | None = None,
     ) -> str:
+        """Single-turn completion.
+
+        Parameters
+        ----------
+        cache_system : bool
+            When True (default) and the provider is Anthropic, the system block
+            is sent with `cache_control: {type: "ephemeral"}` for prompt caching.
+        force_provider : str
+            Override the configured provider for this call (e.g. route /private
+            traffic to a local Ollama).
+        """
         cache_key = None
         if cache:
             cache_key = self._cache_key(prompt, system, model_tier, max_tokens, temperature)
@@ -82,20 +159,22 @@ class LLMClient:
             if cached is not None:
                 return cached
 
+        provider = force_provider or self.provider
         try:
             text = await self._complete_with_retry(
-                provider=self.provider,
+                provider=provider,
                 model=self._model_for(model_tier),
                 prompt=prompt,
                 system=system,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                cache_system=cache_system,
             )
         except Exception as primary_exc:
-            if self.fallback_provider and self.fallback_model:
+            if not force_provider and self.fallback_provider and self.fallback_model:
                 logger.warning(
                     "Primary provider %s failed (%s) — using fallback %s",
-                    self.provider, primary_exc, self.fallback_provider,
+                    provider, primary_exc, self.fallback_provider,
                 )
                 text = await self._complete_with_retry(
                     provider=self.fallback_provider,
@@ -104,6 +183,7 @@ class LLMClient:
                     system=system,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    cache_system=False,
                 )
             else:
                 raise LLMError(str(primary_exc)) from primary_exc
@@ -119,6 +199,7 @@ class LLMClient:
         model_tier: ModelTier = "fast",
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        cache_system: bool = True,
     ) -> AsyncIterator[str]:
         async for chunk in self._stream(
             provider=self.provider,
@@ -127,8 +208,83 @@ class LLMClient:
             system=system,
             max_tokens=max_tokens,
             temperature=temperature,
+            cache_system=cache_system,
         ):
             yield chunk
+
+    async def use_tools(
+        self,
+        prompt: str,
+        tools: list[ToolDef],
+        system: str | None = None,
+        model_tier: ModelTier = "fast",
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+        tool_choice: str | None = None,
+        cache_system: bool = True,
+        cache_tools: bool = True,
+    ) -> ToolUseResult:
+        """Anthropic tool-use call. OpenAI/Ollama get a JSON-mode fallback."""
+        if self.provider == "anthropic":
+            return await self._anthropic_tool_use(
+                model=self._model_for(model_tier),
+                prompt=prompt,
+                tools=tools,
+                system=system,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tool_choice=tool_choice,
+                cache_system=cache_system,
+                cache_tools=cache_tools,
+            )
+        # Fallback: synthesise a single tool call by asking the model for JSON.
+        text = await self.complete(
+            prompt=(
+                "Choose exactly one tool. Reply with JSON: "
+                '{"tool": "<name>", "input": {...}}\nAvailable: '
+                + json.dumps([{"name": t.name, "description": t.description} for t in tools])
+                + "\n\n"
+                + prompt
+            ),
+            system=system,
+            model_tier=model_tier,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        try:
+            data = json.loads(text)
+            return ToolUseResult(
+                text="",
+                tool_calls=[ToolCall(id="0", name=data["tool"], input=data.get("input", {}))],
+                stop_reason="tool_use",
+            )
+        except Exception:
+            return ToolUseResult(text=text, tool_calls=[], stop_reason="end_turn")
+
+    async def describe_image(self, path: Path, prompt: str = "Describe this image briefly.") -> str:
+        """Multimodal description using Anthropic Claude (image as base64)."""
+        if self.provider != "anthropic":
+            return ""
+        from anthropic import AsyncAnthropic
+
+        data = base64.standard_b64encode(Path(path).read_bytes()).decode()
+        media_type = "image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        resp = await client.messages.create(
+            model=self.model_fast,
+            max_tokens=512,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+        text = "".join(b.text for b in resp.content if hasattr(b, "text"))
+        if hasattr(resp, "usage"):
+            self._record_usage(self.model_fast, resp.usage)
+        return text
 
     # --- Internals -----------------------------------------------------
     def _model_for(self, tier: ModelTier) -> str:
@@ -150,6 +306,7 @@ class LLMClient:
         system: str | None,
         max_tokens: int,
         temperature: float,
+        cache_system: bool,
     ) -> str:
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(3),
@@ -165,6 +322,7 @@ class LLMClient:
                     system=system,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    cache_system=cache_system,
                 )
         raise LLMError("unreachable")  # pragma: no cover
 
@@ -176,9 +334,12 @@ class LLMClient:
         system: str | None,
         max_tokens: int,
         temperature: float,
+        cache_system: bool,
     ) -> str:
         if provider == "anthropic":
-            return await self._call_anthropic(model, prompt, system, max_tokens, temperature)
+            return await self._call_anthropic(
+                model, prompt, system, max_tokens, temperature, cache_system
+            )
         if provider == "openai":
             return await self._call_openai(model, prompt, system, max_tokens, temperature)
         if provider == "ollama":
@@ -193,18 +354,56 @@ class LLMClient:
         system: str | None,
         max_tokens: int,
         temperature: float,
+        cache_system: bool,
     ) -> AsyncIterator[str]:
         if provider == "anthropic":
-            async for c in self._stream_anthropic(model, prompt, system, max_tokens, temperature):
+            async for c in self._stream_anthropic(
+                model, prompt, system, max_tokens, temperature, cache_system
+            ):
                 yield c
             return
-        # Fallback: yield full response in one chunk for non-streaming providers
-        text = await self._call(provider, model, prompt, system, max_tokens, temperature)
+        text = await self._call(
+            provider, model, prompt, system, max_tokens, temperature, cache_system=False
+        )
         yield text
 
+    @staticmethod
+    def _system_blocks(system: str | None, cache_system: bool) -> list[dict[str, Any]] | None:
+        if not system:
+            return None
+        block: dict[str, Any] = {"type": "text", "text": system}
+        if cache_system:
+            block["cache_control"] = {"type": "ephemeral"}
+        return [block]
+
+    def _record_usage(self, model: str, usage: Any) -> None:
+        inp = getattr(usage, "input_tokens", 0) or 0
+        out = getattr(usage, "output_tokens", 0) or 0
+        cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        cr = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cost = self._estimate_cost(model, inp, out, cw, cr)
+        self.usage.add(inp, out, cache_creation=cw, cache_read=cr, cost=cost)
+
+    @staticmethod
+    def _estimate_cost(model: str, inp: int, out: int, cw: int, cr: int) -> float:
+        prices = PRICING.get(model)
+        if not prices:
+            return 0.0
+        return (
+            inp * prices["input"]
+            + out * prices["output"]
+            + cw * prices.get("cache_write", prices["input"])
+            + cr * prices.get("cache_read", prices["input"] * 0.1)
+        ) / 1_000_000
+
     async def _call_anthropic(
-        self, model: str, prompt: str, system: str | None,
-        max_tokens: int, temperature: float,
+        self,
+        model: str,
+        prompt: str,
+        system: str | None,
+        max_tokens: int,
+        temperature: float,
+        cache_system: bool,
     ) -> str:
         from anthropic import AsyncAnthropic
 
@@ -215,17 +414,23 @@ class LLMClient:
             "temperature": temperature,
             "messages": [{"role": "user", "content": prompt}],
         }
-        if system:
-            kwargs["system"] = system
+        sys_blocks = self._system_blocks(system, cache_system)
+        if sys_blocks:
+            kwargs["system"] = sys_blocks
         resp = await client.messages.create(**kwargs)
         text = "".join(block.text for block in resp.content if hasattr(block, "text"))
         if hasattr(resp, "usage"):
-            self.usage.add(resp.usage.input_tokens, resp.usage.output_tokens)
+            self._record_usage(model, resp.usage)
         return text
 
     async def _stream_anthropic(
-        self, model: str, prompt: str, system: str | None,
-        max_tokens: int, temperature: float,
+        self,
+        model: str,
+        prompt: str,
+        system: str | None,
+        max_tokens: int,
+        temperature: float,
+        cache_system: bool,
     ) -> AsyncIterator[str]:
         from anthropic import AsyncAnthropic
 
@@ -236,11 +441,80 @@ class LLMClient:
             "temperature": temperature,
             "messages": [{"role": "user", "content": prompt}],
         }
-        if system:
-            kwargs["system"] = system
+        sys_blocks = self._system_blocks(system, cache_system)
+        if sys_blocks:
+            kwargs["system"] = sys_blocks
         async with client.messages.stream(**kwargs) as stream:
             async for chunk in stream.text_stream:
                 yield chunk
+            final = await stream.get_final_message()
+            if hasattr(final, "usage"):
+                self._record_usage(model, final.usage)
+
+    async def _anthropic_tool_use(
+        self,
+        model: str,
+        prompt: str,
+        tools: list[ToolDef],
+        system: str | None,
+        max_tokens: int,
+        temperature: float,
+        tool_choice: str | None,
+        cache_system: bool,
+        cache_tools: bool,
+    ) -> ToolUseResult:
+        from anthropic import AsyncAnthropic
+
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        tool_payload = []
+        for i, t in enumerate(tools):
+            entry: dict[str, Any] = {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            }
+            # Mark the LAST tool as the cache breakpoint so the whole tools
+            # array is cached together.
+            if cache_tools and i == len(tools) - 1:
+                entry["cache_control"] = {"type": "ephemeral"}
+            tool_payload.append(entry)
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "tools": tool_payload,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        sys_blocks = self._system_blocks(system, cache_system)
+        if sys_blocks:
+            kwargs["system"] = sys_blocks
+        if tool_choice:
+            kwargs["tool_choice"] = (
+                {"type": "tool", "name": tool_choice}
+                if tool_choice not in ("auto", "any", "none")
+                else {"type": tool_choice}
+            )
+
+        resp = await client.messages.create(**kwargs)
+        if hasattr(resp, "usage"):
+            self._record_usage(model, resp.usage)
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        for block in resp.content:
+            btype = getattr(block, "type", None)
+            if btype == "text":
+                text_parts.append(block.text)
+            elif btype == "tool_use":
+                tool_calls.append(
+                    ToolCall(id=block.id, name=block.name, input=dict(block.input))
+                )
+        return ToolUseResult(
+            text="\n".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            stop_reason=getattr(resp, "stop_reason", None),
+        )
 
     async def _call_openai(
         self, model: str, prompt: str, system: str | None,

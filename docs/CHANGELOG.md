@@ -4,6 +4,34 @@ OMNIME no usa versionado semántico todavía — cada release está marcada por 
 commit. Esta es la lista cronológica de los hitos importantes desde que el
 proyecto pasó de scaffolding a su estado actual.
 
+## 2026-05-10 — pure-primitives architecture (DIOS mode)
+
+The agentic loop now sees ONE flat catalog of tool primitives — no more
+dual skill+tool layers. Every capability is a single tool the model can
+compose freely:
+
+- **Atomic primitives** (`src/tools/email_tools.py`, `memory_tools.py`,
+  `web_tools.py`): single-purpose functions returning JSON. Includes
+  Gmail CRUD, semantic memory search/save, profile recall, recent
+  messages, web fetch, web search.
+- **Compound primitives** (via `wrap_skill_as_tool`): the existing rich
+  Skills (browser_agent, cv_generator, daily_briefing, code_generator,
+  etc.) are now exposed to the loop as tools — each is a self-contained
+  sub-agent the model can invoke. Email/web skills excluded; their
+  atomic primitives cover the same surface.
+
+Slash commands (`/inbox`, `/cv`, `/fetch`, …) keep working with their
+existing rich UI — they bypass the loop and dispatch directly to skills
+for instant, $0 responses.
+
+Tool side-effects (inline buttons, files, scheduled-send IDs) bubble up
+through `context._tool_side_effects` and the orchestrator attaches them
+to the final Response. No fragile parsing of LLM output needed.
+
+Driver system prompt rewritten to lean into primitives: "every capability
+is a tool, you decide what to call and how to compose the answer".
+Worked examples for compound flows (inbox + read + send + memory_save).
+
 ## 2026-05-10 — primitive tool layer (data-first, model composes the response)
 
 The agentic loop no longer feeds **pre-cooked skill output** to Sonnet for

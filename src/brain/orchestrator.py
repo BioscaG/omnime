@@ -328,41 +328,21 @@ class Orchestrator:
     AGENTIC_MAX_STEPS = 5
     AGENTIC_MODEL_TIER = "fast"  # Sonnet 4.6 — strong reasoning without Opus cost
 
-    # Email skills are HIDDEN from the agentic loop — they're rich UI for
-    # slash commands. The loop sees primitive tools (gmail_list, gmail_read,
-    # gmail_send, …) and composes responses itself, instead of receiving
-    # pre-formatted skill output.
-    _AGENTIC_SKILL_BLOCKLIST = {
-        "email_inbox", "email_read", "email_search", "email_composer",
-    }
-
     async def _run_agentic_loop(
         self,
         user_id: int,
         message: str,
         context: Context,
     ) -> Response:
-        """Multi-tool loop: the driver model picks a tool (primitive) or a
-        skill (rich action), the orchestrator runs it, the result is fed
-        back, until the model emits a final text turn or the step cap is
-        hit."""
-        registry = self.skill_registry
-        if registry is None:
-            return await self._handle_chat(user_id, message, context)
-
+        """Pure-primitives agentic loop: every capability — atomic data
+        primitive or compound sub-agent — is exposed as a single tool. The
+        driver model decides what to call, in what order, and writes the
+        final answer itself. No skill-level pre-rendering interferes."""
         from src.tools import collect_default_tools, tool_to_def
 
-        primitive_tools = collect_default_tools()
+        primitive_tools = collect_default_tools(skill_registry=self.skill_registry)
         primitives_by_name = {t.name: t for t in primitive_tools}
-
-        skill_tools = [
-            s for s in registry.list_enabled()
-            if s.name not in self._AGENTIC_SKILL_BLOCKLIST
-        ]
-
-        tools = [tool_to_def(t) for t in primitive_tools] + [
-            self._skill_to_tool_def(s) for s in skill_tools
-        ]
+        tools = [tool_to_def(t) for t in primitive_tools]
         if not tools:
             return await self._handle_chat(user_id, message, context)
 
@@ -373,28 +353,41 @@ class Orchestrator:
             communication_style=context.profile.get("communication_style"),
             capabilities=capabilities,
             extra=(
-                "\nYou are operating as the AGENTIC LOOP DRIVER. The user "
-                "asked you to do something — pick the right tool and call "
-                "it with structured args. After each tool result, decide if "
-                "you need another tool, or if you're ready to answer.\n\n"
-                "CRITICAL — final-answer rules:\n"
-                "1. NEVER end the turn with no text after a tool ran. After "
-                "every tool call you MUST write a final user-facing answer.\n"
-                "2. ANSWER THE USER'S QUESTION DIRECTLY using the tool "
-                "results. Don't just dump the raw tool output. Examples:\n"
-                "   - User: 'tengo algún mail importante?' → don't list all "
-                "10 unread. Look at the tool result, identify only the 🔴 "
-                "action items, and answer: 'Sí, hay X de [sender] sobre Y. "
-                "Los demás son newsletters.' or 'No, los 10 son promos.'\n"
-                "   - User: 'lee el de Anthropic' → after email_read, "
-                "summarise its content in 1-3 lines, don't repeat the body.\n"
-                "   - User: 'mira inbox y respóndele al de X' → after "
-                "calling both tools, confirm the draft is ready, don't "
-                "re-print everything.\n"
-                "3. Be the user's assistant, not a transcript machine. "
-                "Act on the data, interpret it, summarise, recommend.\n"
-                "4. Match the user's language (Spanish or English) in your "
-                "final answer.\n"
+                "\nYou are operating as a fully agentic personal assistant. "
+                "Every capability is exposed to you as a TOOL primitive — "
+                "Gmail CRUD (gmail_list, gmail_read, gmail_send, ...), memory "
+                "(memory_search, memory_save, memory_recall_profile), web "
+                "(web_fetch, web_search), and compound sub-agents (browser, "
+                "cv generator, etc.). YOU choose what to call, in what "
+                "order, and how to compose the response.\n\n"
+                "PHILOSOPHY:\n"
+                "- Tools return raw JSON data. YOU interpret it.\n"
+                "- Compose freely: 'check inbox + reply to one + save the "
+                "  outcome to memory' is three tool calls in one turn.\n"
+                "- Be ambitious. If a question would benefit from looking "
+                "  something up, look it up. If you should remember "
+                "  something the user said, save it. Don't ask permission "
+                "  for read-only actions; just do them.\n"
+                "- Be conservative on writes that have external impact "
+                "  (gmail_send): default delay_minutes is 10 so the user "
+                "  can cancel; honour that unless they explicitly say "
+                "  'send now'.\n\n"
+                "FINAL-ANSWER RULES:\n"
+                "1. NEVER end without a final text turn. After tool calls, "
+                "   write the user-facing answer.\n"
+                "2. Answer the user's actual question — DON'T dump raw "
+                "   tool output. Examples:\n"
+                "   - 'tengo algún mail importante?' → look at gmail_list "
+                "     JSON, filter by importance yourself, answer in 1-2 "
+                "     lines: 'Sí, el de Anthropic sobre la factura. Los "
+                "     demás son newsletters.'\n"
+                "   - 'lee el de X y respóndele que voy mañana' → "
+                "     gmail_list → gmail_read → gmail_send (with 10-min "
+                "     delay). Confirm what you did, don't re-print bodies.\n"
+                "   - 'qué decidí sobre Y?' → memory_search, then answer "
+                "     using the recalled facts.\n"
+                "3. Match the user's language (Spanish or English) in the "
+                "   final answer.\n"
                 f"Hard cap: {self.AGENTIC_MAX_STEPS} tool calls per turn."
             ),
         )
@@ -441,31 +434,8 @@ class Orchestrator:
 
             tool_results: list[dict[str, Any]] = []
             for call in result.tool_calls:
-                # Primitive tool (returns string)?
-                if call.name in primitives_by_name:
-                    tool = primitives_by_name[call.name]
-                    try:
-                        out = await tool.run(call.input or {}, context)
-                    except Exception as exc:
-                        logger.exception("tool %s failed in agentic loop", tool.name)
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": call.id,
-                            "content": f"Error: {exc}",
-                            "is_error": True,
-                        })
-                        continue
-                    skill_outputs.append((tool.name, type("StubSr", (), {"text": out, "inline_buttons": [], "files": []})()))
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": call.id,
-                        "content": (out or "(no result)")[:8000],
-                    })
-                    continue
-
-                # Skill (rich action, returns SkillResponse)
-                skill = registry.get(call.name)
-                if skill is None:
+                tool = primitives_by_name.get(call.name)
+                if tool is None:
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": call.id,
@@ -474,27 +444,22 @@ class Orchestrator:
                     })
                     continue
                 try:
-                    sr = await skill.execute_with_args(call.input or {}, context)
+                    out = await tool.run(call.input or {}, context)
                 except Exception as exc:
-                    logger.exception("skill %s failed in agentic loop", skill.name)
-                    sr = None
+                    logger.exception("tool %s failed in agentic loop", tool.name)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": call.id,
                         "content": f"Error: {exc}",
                         "is_error": True,
                     })
-                if sr is not None:
-                    skill_outputs.append((skill.name, sr))
-                    if sr.inline_buttons:
-                        last_inline_buttons = sr.inline_buttons
-                    if sr.files:
-                        last_files = sr.files
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": call.id,
-                        "content": (sr.text or "(no text)")[:6000],
-                    })
+                    continue
+                skill_outputs.append((tool.name, out))
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": (out or "(no result)")[:8000],
+                })
 
             history.append({"role": "user", "content": tool_results})
 
@@ -523,15 +488,17 @@ class Orchestrator:
             except Exception as exc:
                 logger.warning("forced final-answer step failed: %s", exc)
 
-        # Last-resort fallback (should be rare with the forced step above).
-        if not final_text and skill_outputs:
-            chunks = [sr.text for _, sr in skill_outputs if sr.text]
-            final_text = "\n\n---\n\n".join(chunks) if chunks else "(no output)"
         if not final_text:
             final_text = "I tried but didn't produce anything useful — try rephrasing?"
 
-        # Surface scheduled-send cancellation as inline buttons.
+        # Side-effects raised by tools during the loop: inline buttons, files,
+        # scheduled-send cancellation hooks. Surface them on the Response so
+        # the bot UI can render them.
         side = getattr(context, "_tool_side_effects", None) or {}
+        for row in side.get("inline_buttons", []) or []:
+            last_inline_buttons = (last_inline_buttons or []) + [row]
+        for f in side.get("files", []) or []:
+            last_files = (last_files or []) + [f]
         for sched in side.get("scheduled_sends", []):
             cancel_row = [{
                 "text": f"❌ Cancel send → {sched.get('to')}",
@@ -547,23 +514,7 @@ class Orchestrator:
             metadata={
                 "agentic": True,
                 "steps": len(skill_outputs),
-                "skills_called": [name for name, _ in skill_outputs],
-            },
-        )
-
-    @staticmethod
-    def _skill_to_tool_def(skill):
-        """Wrap a Skill as a ToolDef for the agentic loop."""
-        from src.brain.llm_client import ToolDef
-
-        desc = skill.description + (
-            ("  Examples: " + " | ".join(skill.examples[:2])) if getattr(skill, "examples", None) else ""
-        )
-        return ToolDef(
-            name=skill.name,
-            description=desc,
-            input_schema=skill.input_schema or {
-                "type": "object", "properties": {}, "required": []
+                "tools_called": [name for name, _ in skill_outputs],
             },
         )
 

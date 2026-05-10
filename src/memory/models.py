@@ -253,6 +253,118 @@ class Goal(Base):
     )
 
 
+class Book(Base):
+    __tablename__ = "books"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    author: Mapped[Optional[str]] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(50), default="reading")
+    rating: Mapped[Optional[float]] = mapped_column(Float)
+    started_at: Mapped[Optional[date]] = mapped_column(Date)
+    finished_at: Mapped[Optional[date]] = mapped_column(Date)
+    takeaways: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    quotes: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    source: Mapped[Optional[str]] = mapped_column(String(255))
+    extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Decision(Base):
+    __tablename__ = "decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    rationale: Mapped[Optional[str]] = mapped_column(Text)
+    alternatives: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    outcome: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    decided_at: Mapped[Optional[date]] = mapped_column(Date)
+    category: Mapped[Optional[str]] = mapped_column(String(100))
+    extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class HealthEvent(Base):
+    __tablename__ = "health_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    category: Mapped[Optional[str]] = mapped_column(String(100))
+    date: Mapped[Optional[date]] = mapped_column(Date)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    severity: Mapped[Optional[str]] = mapped_column(String(50))
+    extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Quote(Base):
+    __tablename__ = "quotes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(500))
+    author: Mapped[Optional[str]] = mapped_column(String(255))
+    tags: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class JobOpportunity(Base):
+    __tablename__ = "job_opportunities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    company: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(255), nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(50), default="discovered")
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    location: Mapped[Optional[str]] = mapped_column(String(255))
+    remote: Mapped[bool] = mapped_column(Boolean, default=False)
+    salary_range: Mapped[Optional[str]] = mapped_column(String(100))
+    link: Mapped[Optional[str]] = mapped_column(String(500))
+    contact: Mapped[Optional[str]] = mapped_column(String(255))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    applied_at: Mapped[Optional[date]] = mapped_column(Date)
+    next_step_at: Mapped[Optional[date]] = mapped_column(Date)
+    extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CVVariant(Base):
+    __tablename__ = "cv_variants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    opportunity_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("job_opportunities.id", ondelete="SET NULL")
+    )
+    label: Mapped[Optional[str]] = mapped_column(String(255))
+    body_markdown: Mapped[Optional[str]] = mapped_column(Text)
+    highlights: Mapped[Optional[list[str]]] = mapped_column(JSONB)
+    style: Mapped[Optional[str]] = mapped_column(String(100))
+    score: Mapped[Optional[float]] = mapped_column(Float)
+    chosen: Mapped[bool] = mapped_column(Boolean, default=False)
+    feedback: Mapped[Optional[str]] = mapped_column(Text)
+    extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class WeeklyReview(Base):
     __tablename__ = "weekly_reviews"
 
@@ -277,6 +389,7 @@ class Conversation(Base):
     intent: Mapped[Optional[str]] = mapped_column(String(50))
     entities_extracted: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB)
     telegram_message_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    sentiment: Mapped[Optional[float]] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["UserProfile"] = relationship(back_populates="conversations")

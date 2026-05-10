@@ -54,6 +54,26 @@ Output ONLY valid JSON (no preamble) matching this schema:
                     "location": str|null, "people_involved": [str],
                     "lessons_learned": str|null}}],
   "ideas": [{{"content": str, "category": str|null, "tags": [str]}}],
+  "books": [{{"title": str, "author": str|null,
+              "status": "wishlist"|"reading"|"finished"|"abandoned"|null,
+              "rating": float|null, "started_at": "YYYY-MM-DD"|null,
+              "finished_at": "YYYY-MM-DD"|null,
+              "takeaways": [str], "quotes": [str], "source": str|null}}],
+  "decisions": [{{"title": str, "description": str|null, "rationale": str|null,
+                  "alternatives": [str], "outcome": str|null,
+                  "status": "pending"|"made"|"reversed"|null,
+                  "decided_at": "YYYY-MM-DD"|null, "category": str|null}}],
+  "health_events": [{{"title": str, "category": str|null,
+                      "date": "YYYY-MM-DD"|null, "description": str|null,
+                      "severity": "low"|"medium"|"high"|null}}],
+  "quotes": [{{"text": str, "source": str|null, "author": str|null, "tags": [str]}}],
+  "job_opportunities": [{{"company": str, "role": str, "source": str|null,
+                          "status": "discovered"|"applied"|"interviewing"|"offer"|"rejected"|"withdrawn"|null,
+                          "description": str|null, "location": str|null,
+                          "remote": bool|null, "salary_range": str|null,
+                          "link": str|null, "contact": str|null,
+                          "applied_at": "YYYY-MM-DD"|null,
+                          "next_step_at": "YYYY-MM-DD"|null}}],
   "user_profile_updates": {{"name": str|null, "bio_addition": str|null,
                             "communication_style": str|null,
                             "personality_traits": object|null,
@@ -66,6 +86,9 @@ Rules:
 - Use ISO date format YYYY-MM-DD.
 - Empty arrays / null when nothing applies.
 - Do NOT invent details that aren't in the message or context.
+- A "decision" needs a clear choice — not casual opinions.
+- A "health_event" is a notable medical/wellness milestone, not daily mood.
+- A "quote" is something memorable the user explicitly highlighted.
 
 User message:
 \"\"\"
@@ -84,43 +107,39 @@ class Extraction:
     achievements: list[dict[str, Any]] = field(default_factory=list)
     life_events: list[dict[str, Any]] = field(default_factory=list)
     ideas: list[dict[str, Any]] = field(default_factory=list)
+    books: list[dict[str, Any]] = field(default_factory=list)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    health_events: list[dict[str, Any]] = field(default_factory=list)
+    quotes: list[dict[str, Any]] = field(default_factory=list)
+    job_opportunities: list[dict[str, Any]] = field(default_factory=list)
     user_profile_updates: dict[str, Any] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
         return not any(
             [
-                self.projects,
-                self.work_experience,
-                self.education,
-                self.skills,
-                self.contacts,
-                self.achievements,
-                self.life_events,
-                self.ideas,
-                self.user_profile_updates,
+                self.projects, self.work_experience, self.education, self.skills,
+                self.contacts, self.achievements, self.life_events, self.ideas,
+                self.books, self.decisions, self.health_events, self.quotes,
+                self.job_opportunities, self.user_profile_updates,
             ]
         )
 
     def summary(self) -> str:
         parts: list[str] = []
-        if self.projects:
-            parts.append(f"{len(self.projects)} project(s)")
-        if self.work_experience:
-            parts.append(f"{len(self.work_experience)} job(s)")
-        if self.education:
-            parts.append(f"{len(self.education)} education entry/ies")
-        if self.skills:
-            parts.append(f"{len(self.skills)} skill(s)")
-        if self.contacts:
-            parts.append(f"{len(self.contacts)} contact(s)")
-        if self.achievements:
-            parts.append(f"{len(self.achievements)} achievement(s)")
-        if self.life_events:
-            parts.append(f"{len(self.life_events)} life event(s)")
-        if self.ideas:
-            parts.append(f"{len(self.ideas)} idea(s)")
-        if self.user_profile_updates:
-            parts.append("profile update")
+        if self.projects: parts.append(f"{len(self.projects)} project(s)")
+        if self.work_experience: parts.append(f"{len(self.work_experience)} job(s)")
+        if self.education: parts.append(f"{len(self.education)} education entry/ies")
+        if self.skills: parts.append(f"{len(self.skills)} skill(s)")
+        if self.contacts: parts.append(f"{len(self.contacts)} contact(s)")
+        if self.achievements: parts.append(f"{len(self.achievements)} achievement(s)")
+        if self.life_events: parts.append(f"{len(self.life_events)} life event(s)")
+        if self.ideas: parts.append(f"{len(self.ideas)} idea(s)")
+        if self.books: parts.append(f"{len(self.books)} book(s)")
+        if self.decisions: parts.append(f"{len(self.decisions)} decision(s)")
+        if self.health_events: parts.append(f"{len(self.health_events)} health event(s)")
+        if self.quotes: parts.append(f"{len(self.quotes)} quote(s)")
+        if self.job_opportunities: parts.append(f"{len(self.job_opportunities)} job opportunity/ies")
+        if self.user_profile_updates: parts.append("profile update")
         return ", ".join(parts) if parts else "nothing new"
 
 
@@ -172,5 +191,10 @@ class EntityExtractor:
             achievements=data.get("achievements") or [],
             life_events=data.get("life_events") or [],
             ideas=data.get("ideas") or [],
+            books=data.get("books") or [],
+            decisions=data.get("decisions") or [],
+            health_events=data.get("health_events") or [],
+            quotes=data.get("quotes") or [],
+            job_opportunities=data.get("job_opportunities") or [],
             user_profile_updates=data.get("user_profile_updates") or {},
         )

@@ -134,6 +134,16 @@ class MemoryManager:
                 store.add_life_event(user_id=user_id, **ev)
             for idea in extraction.ideas:
                 store.add_idea(user_id=user_id, **idea)
+            for book in extraction.books:
+                store.upsert_book(user_id=user_id, **book)
+            for decision in extraction.decisions:
+                store.upsert_decision(user_id=user_id, **decision)
+            for hev in extraction.health_events:
+                store.add_health_event(user_id=user_id, **hev)
+            for q in extraction.quotes:
+                store.add_quote(user_id=user_id, **q)
+            for opp in extraction.job_opportunities:
+                store.upsert_job_opportunity(user_id=user_id, **opp)
             if extraction.user_profile_updates:
                 upd = extraction.user_profile_updates
                 fields: dict[str, Any] = {}
@@ -216,6 +226,74 @@ class MemoryManager:
                         "importance": importance_score(
                             idea.get("content") or "", {"category": "idea"}
                         ),
+                    },
+                )
+                deduplicated += int(dup)
+        for book in extraction.books:
+            if book.get("title"):
+                _, dup = self.lifecycle.add_with_dedup(
+                    collection="knowledge",
+                    text=(
+                        f"Book: {book['title']} by {book.get('author') or 'unknown'}. "
+                        f"Takeaways: {', '.join(book.get('takeaways') or [])}"
+                    ),
+                    metadata={
+                        "user_id": user_id, "category": "book",
+                        "importance": importance_score(
+                            " ".join(book.get("takeaways") or []) or book.get("title") or "",
+                            {"category": "achievement"},
+                        ),
+                    },
+                )
+                deduplicated += int(dup)
+        for d in extraction.decisions:
+            if d.get("title"):
+                _, dup = self.lifecycle.add_with_dedup(
+                    collection="knowledge",
+                    text=(
+                        f"Decision: {d['title']}. Rationale: {d.get('rationale') or ''}. "
+                        f"Outcome: {d.get('outcome') or 'pending'}"
+                    ),
+                    metadata={
+                        "user_id": user_id, "category": "decision",
+                        "importance": importance_score(
+                            d.get("rationale") or d.get("title") or "",
+                            {"category": "achievement"},
+                        ),
+                    },
+                )
+                deduplicated += int(dup)
+        for h in extraction.health_events:
+            if h.get("title"):
+                _, dup = self.lifecycle.add_with_dedup(
+                    collection="knowledge",
+                    text=f"Health: {h['title']}. {h.get('description') or ''}",
+                    metadata={
+                        "user_id": user_id, "category": "health",
+                        "importance": importance_score(h.get("description") or "", {"category": "life_event"}),
+                    },
+                )
+                deduplicated += int(dup)
+        for q in extraction.quotes:
+            if q.get("text"):
+                _, dup = self.lifecycle.add_with_dedup(
+                    collection="knowledge",
+                    text=f"Quote ({q.get('author') or q.get('source') or '—'}): {q['text']}",
+                    metadata={"user_id": user_id, "category": "quote", "importance": 0.5},
+                )
+                deduplicated += int(dup)
+        for opp in extraction.job_opportunities:
+            if opp.get("company") and opp.get("role"):
+                _, dup = self.lifecycle.add_with_dedup(
+                    collection="knowledge",
+                    text=(
+                        f"Job opportunity: {opp['role']} @ {opp['company']}. "
+                        f"Status: {opp.get('status') or 'discovered'}. "
+                        f"{opp.get('description') or ''}"
+                    ),
+                    metadata={
+                        "user_id": user_id, "category": "job_opportunity",
+                        "importance": 0.7,
                     },
                 )
                 deduplicated += int(dup)

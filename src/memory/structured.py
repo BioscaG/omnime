@@ -284,6 +284,128 @@ class StructuredStore:
         self.session.flush()
         return s
 
+    # --- Books -----------------------------------------------------------
+    def upsert_book(self, user_id: int, **data: Any) -> m.Book:
+        title = data.get("title")
+        existing = None
+        if title:
+            existing = self.session.scalar(
+                select(m.Book)
+                .where(m.Book.user_id == user_id)
+                .where(m.Book.title.ilike(title))
+            )
+        data["started_at"] = _coerce_date(data.get("started_at"))
+        data["finished_at"] = _coerce_date(data.get("finished_at"))
+        if existing:
+            for k, v in data.items():
+                if v is not None and hasattr(existing, k):
+                    setattr(existing, k, v)
+            return existing
+        b = m.Book(user_id=user_id, **{k: v for k, v in data.items() if v is not None})
+        self.session.add(b)
+        self.session.flush()
+        return b
+
+    def list_books(self, user_id: int, status: str | None = None) -> list[m.Book]:
+        stmt = select(m.Book).where(m.Book.user_id == user_id)
+        if status:
+            stmt = stmt.where(m.Book.status == status)
+        return list(self.session.scalars(stmt.order_by(m.Book.created_at.desc())))
+
+    # --- Decisions -------------------------------------------------------
+    def upsert_decision(self, user_id: int, **data: Any) -> m.Decision:
+        title = data.get("title")
+        existing = None
+        if title:
+            existing = self.session.scalar(
+                select(m.Decision)
+                .where(m.Decision.user_id == user_id)
+                .where(m.Decision.title.ilike(title))
+            )
+        data["decided_at"] = _coerce_date(data.get("decided_at"))
+        if existing:
+            for k, v in data.items():
+                if v is not None and hasattr(existing, k):
+                    setattr(existing, k, v)
+            return existing
+        d = m.Decision(user_id=user_id, **{k: v for k, v in data.items() if v is not None})
+        self.session.add(d)
+        self.session.flush()
+        return d
+
+    def list_decisions(self, user_id: int, status: str | None = None) -> list[m.Decision]:
+        stmt = select(m.Decision).where(m.Decision.user_id == user_id)
+        if status:
+            stmt = stmt.where(m.Decision.status == status)
+        return list(self.session.scalars(stmt.order_by(m.Decision.decided_at.desc().nullslast())))
+
+    # --- Health events ---------------------------------------------------
+    def add_health_event(self, user_id: int, **data: Any) -> m.HealthEvent:
+        data["date"] = _coerce_date(data.get("date"))
+        h = m.HealthEvent(user_id=user_id, **{k: v for k, v in data.items() if v is not None})
+        self.session.add(h)
+        self.session.flush()
+        return h
+
+    # --- Quotes ----------------------------------------------------------
+    def add_quote(self, user_id: int, **data: Any) -> m.Quote:
+        q = m.Quote(user_id=user_id, **{k: v for k, v in data.items() if v is not None})
+        self.session.add(q)
+        self.session.flush()
+        return q
+
+    # --- Job opportunities ----------------------------------------------
+    def upsert_job_opportunity(self, user_id: int, **data: Any) -> m.JobOpportunity:
+        company = data.get("company")
+        role = data.get("role")
+        existing = None
+        if company and role:
+            existing = self.session.scalar(
+                select(m.JobOpportunity)
+                .where(m.JobOpportunity.user_id == user_id)
+                .where(m.JobOpportunity.company.ilike(company))
+                .where(m.JobOpportunity.role.ilike(role))
+            )
+        data["applied_at"] = _coerce_date(data.get("applied_at"))
+        data["next_step_at"] = _coerce_date(data.get("next_step_at"))
+        if existing:
+            for k, v in data.items():
+                if v is not None and hasattr(existing, k):
+                    setattr(existing, k, v)
+            return existing
+        j = m.JobOpportunity(user_id=user_id, **{k: v for k, v in data.items() if v is not None})
+        self.session.add(j)
+        self.session.flush()
+        return j
+
+    def list_job_opportunities(self, user_id: int, status: str | None = None) -> list[m.JobOpportunity]:
+        stmt = select(m.JobOpportunity).where(m.JobOpportunity.user_id == user_id)
+        if status:
+            stmt = stmt.where(m.JobOpportunity.status == status)
+        return list(self.session.scalars(stmt.order_by(m.JobOpportunity.created_at.desc())))
+
+    # --- CV variants -----------------------------------------------------
+    def add_cv_variant(self, user_id: int, **data: Any) -> m.CVVariant:
+        v = m.CVVariant(user_id=user_id, **{k: v for k, v in data.items() if v is not None})
+        self.session.add(v)
+        self.session.flush()
+        return v
+
+    def list_cv_variants(self, user_id: int, opportunity_id: int | None = None) -> list[m.CVVariant]:
+        stmt = select(m.CVVariant).where(m.CVVariant.user_id == user_id)
+        if opportunity_id is not None:
+            stmt = stmt.where(m.CVVariant.opportunity_id == opportunity_id)
+        return list(self.session.scalars(stmt.order_by(m.CVVariant.created_at.desc())))
+
+    def mark_cv_chosen(self, variant_id: int, feedback: str | None = None) -> m.CVVariant | None:
+        v = self.session.get(m.CVVariant, variant_id)
+        if v is None:
+            return None
+        v.chosen = True
+        if feedback:
+            v.feedback = feedback
+        return v
+
     # --- Audit -----------------------------------------------------------
     def add_audit(
         self,

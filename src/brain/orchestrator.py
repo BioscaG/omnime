@@ -226,18 +226,31 @@ class Orchestrator:
         if private:
             return await self._handle_private(user_id, message, context, stream_message=stream_message)
 
-        intent, route_meta = await self.classify_intent(message, context)
-        context.intent = intent.value
+        # 1. Trivial greetings — cheap text-only path, no LLM router needed.
+        if _TRIVIAL_CHAT.match(message):
+            context.intent = Intent.CHAT.value
+            return await self._handle_chat(
+                user_id, message, context, stream_message=stream_message,
+            )
 
-        if intent == Intent.STORE:
-            return await self._handle_store(user_id, message, context)
-        if intent == Intent.QUERY:
-            return await self._handle_query(user_id, message, context, stream_message=stream_message)
-        if intent == Intent.TASK:
-            return await self._handle_task(user_id, message, context, hint=route_meta.get("input", {}))
-        if intent == Intent.EVOLVE:
-            return await self._handle_evolve(user_id, message, context)
-        return await self._handle_chat(user_id, message, context, stream_message=stream_message)
+        # 2. Slash commands — direct skill dispatch (instant, $0).
+        if message.lstrip().startswith("/"):
+            context.intent = Intent.TASK.value
+            return await self._handle_task(user_id, message, context, hint=None)
+
+        # 3. EVOLVE — explicit "teach yourself X" requests.
+        for intent_t, pattern in _FASTPATH_PATTERNS:
+            if intent_t == Intent.EVOLVE and pattern.search(message):
+                context.intent = Intent.EVOLVE.value
+                return await self._handle_evolve(user_id, message, context)
+
+        # 4. EVERYTHING ELSE — agentic loop. The driver model has the full
+        # primitive catalog (gmail_*, calendar_*, memory_*, web_*, notion_*,
+        # github_*, plus compound sub-agents) and decides whether to call
+        # tools, save to memory, or just chat. No more pre-classifier
+        # bottleneck deciding 'this is CHAT, no tools for you'.
+        context.intent = Intent.TASK.value
+        return await self._run_agentic_loop(user_id, message, context)
 
     # --- Handlers ------------------------------------------------------
     async def _handle_store(self, user_id: int, message: str, context: Context) -> Response:

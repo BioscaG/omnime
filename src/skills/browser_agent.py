@@ -40,7 +40,7 @@ and a list of visible interactive elements. Reply with EXACTLY ONE next action.
 Goal:
 {goal}
 
-Steps already taken:
+Steps already taken (with outcome):
 {history}
 
 Current page:
@@ -48,6 +48,7 @@ Current page:
 - Title: {title}
 - Text excerpt: {excerpt}
 - Looks like a payment / checkout page: {is_payment}
+- Looks like a captcha / anti-bot page: {is_blocked}
 
 Visible elements (truncated):
 {elements}
@@ -56,13 +57,20 @@ Respond ONLY with valid JSON:
 {{
   "reasoning": "<short, what you observe and why this action>",
   "action": "goto" | "click" | "fill" | "press" | "scroll" | "wait" | "ask_user" | "done",
-  "selector": "<CSS selector | text | label | role:name>"   // omit for goto/scroll/wait/done/ask_user
-  "url": "<https://...>"                                    // only for goto
-  "value": "<text>"                                          // only for fill
-  "key": "Enter|Tab|Escape"                                  // only for press
+  "selector_type": "css" | "text" | "role" | "label",   // REQUIRED for click/fill (omit otherwise)
+  "selector": "<the locator value, see selector_type below>",
+  "url": "<https://...>",                                // only for goto
+  "value": "<text>",                                     // only for fill
+  "key": "Enter|Tab|Escape",                             // only for press
   "needs_confirmation": true | false,
-  "user_message": "<question to send the user>"              // only when action=ask_user
+  "user_message": "<question to send the user>"           // only when action=ask_user
 }}
+
+Selector types — pick ONE and put the bare value in `selector`:
+- `css`: a real CSS selector, e.g. `input[name='q']`, `#submit`, `.btn-primary`
+- `text`: visible text on the element, e.g. `Rechazar todo` (no `text=` prefix)
+- `role`: ARIA role + name, e.g. `button:Aceptar`  (format `<role>:<accessible name>`)
+- `label`: the form label associated with an input, e.g. `Origen`
 
 Rules:
 - Use `ask_user` whenever you reach a login form, a payment / checkout, a destructive
@@ -70,7 +78,9 @@ Rules:
 - Never guess credit-card numbers, passwords, or one-time codes.
 - Set `needs_confirmation: true` for any submit-like action (form submit, "buy",
   "send", "delete", "confirm").
-- Prefer text/label-based selectors over brittle CSS.
+- If the previous attempt failed, try a DIFFERENT selector type or strategy. Do not
+  repeat the same selector that just failed.
+- If the page looks blocked (captcha, "unusual traffic"), use `ask_user` and explain.
 - `done` when the goal is met, with `reasoning` summarising the outcome.
 """
 
@@ -81,6 +91,7 @@ class AgentStep:
     reasoning: str = ""
     url: Optional[str] = None
     selector: Optional[str] = None
+    selector_type: Optional[str] = None
     value: Optional[str] = None
     key: Optional[str] = None
     needs_confirmation: bool = False
@@ -88,6 +99,7 @@ class AgentStep:
     screenshot_path: Optional[Path] = None
     page_url: str = ""
     page_title: str = ""
+    succeeded: Optional[bool] = None
 
 
 @dataclass
@@ -211,13 +223,19 @@ class BrowserAgentSkill(BaseSkill):
                 )
 
                 ok = await self._execute_step(browser, step)
+                step.succeeded = ok
                 if not ok:
+                    # Don't bail out on a single failure — let Claude see the
+                    # FAILED outcome in history and try a different tactic.
+                    logger.info(
+                        "iter_actions: step %d failed, will let model retry",
+                        step_index,
+                    )
                     yield AgentEvent(
-                        kind="error",
-                        text=f"Step {step_index} failed: {step.action} {step.selector or step.url}",
+                        kind="step",
+                        text=f"⚠️ Step {step_index} failed; the agent will adapt.",
                         step=step,
                     )
-                    return
 
             yield AgentEvent(
                 kind="error",
@@ -240,9 +258,16 @@ class BrowserAgentSkill(BaseSkill):
     ) -> AgentStep:
         elements_block = json.dumps(state.interactive_elements[:30], indent=0)[:2000]
         history_block = "\n".join(
-            f"{i+1}. {h.action} {h.selector or h.url or ''} → {h.reasoning[:120]}"
+            f"{i+1}. {h.action} {h.selector_type or ''}={h.selector or h.url or ''} "
+            f"→ {'OK' if h.succeeded else 'FAILED' if h.succeeded is False else '?'}: "
+            f"{h.reasoning[:120]}"
             for i, h in enumerate(history[-6:])
         ) or "(none)"
+
+        is_blocked = bool(re.search(
+            r"/sorry/|recaptcha|unusual traffic|are you (a )?human|please verify",
+            (state.url + " " + state.text_excerpt).lower(),
+        ))
 
         prompt = PLAN_PROMPT.format(
             goal=goal,
@@ -251,6 +276,7 @@ class BrowserAgentSkill(BaseSkill):
             title=state.title,
             excerpt=state.text_excerpt[:1500],
             is_payment=state.looks_like_payment,
+            is_blocked=is_blocked,
             elements=elements_block,
         )
 
@@ -272,11 +298,17 @@ class BrowserAgentSkill(BaseSkill):
             return AgentStep(action="ask_user", reasoning="Couldn't decide next step",
                               user_message="Algo salió raro al razonar. ¿Sigo, o cancelamos?")
 
+        sel = data.get("selector")
+        sel_type = data.get("selector_type")
+        # Normalise legacy formats Claude sometimes emits despite instructions.
+        if sel and not sel_type:
+            sel_type, sel = _infer_selector_type(sel)
         return AgentStep(
             action=str(data.get("action", "ask_user")).lower(),
             reasoning=str(data.get("reasoning") or "")[:500],
             url=data.get("url"),
-            selector=data.get("selector"),
+            selector=sel,
+            selector_type=sel_type,
             value=data.get("value"),
             key=data.get("key"),
             needs_confirmation=bool(data.get("needs_confirmation", False)),
@@ -331,15 +363,11 @@ class BrowserAgentSkill(BaseSkill):
                 await browser.goto(step.url)
                 return True
             if step.action == "click" and step.selector:
-                # Try multiple selector strategies.
-                for tactic in (browser.click_text, browser.click_role_wrapper(step.selector), browser.click_css):
-                    if await tactic(step.selector):
-                        return True
-                return False
+                return await _click_by_type(browser, step.selector_type, step.selector)
             if step.action == "fill" and step.selector:
-                if await browser.fill(step.selector, step.value or ""):
-                    return True
-                return await browser.fill_label(step.selector, step.value or "")
+                return await _fill_by_type(
+                    browser, step.selector_type, step.selector, step.value or ""
+                )
             if step.action == "press" and step.key:
                 await browser.press(step.key)
                 return True
@@ -382,33 +410,80 @@ class BrowserAgentSkill(BaseSkill):
         return m
 
 
-# --- Browser convenience wrappers ------------------------------------------
-# These extend Browser with multiple-strategy click/fill helpers used above.
+# --- Selector dispatchers ---------------------------------------------------
+# Single source of truth for translating (selector_type, selector) into a
+# Playwright action. Keeps the LLM prompt simple and the failure modes
+# observable.
 
-async def _click_role(self, name: str, timeout: float = 5000) -> bool:
-    for role in ("button", "link", "menuitem"):
-        try:
-            await self._page.get_by_role(role, name=name).first.click(timeout=timeout)
+def _infer_selector_type(value: str) -> tuple[str, str]:
+    """Best-effort guess when the LLM forgets to set selector_type."""
+    v = (value or "").strip()
+    if v.startswith("text="):
+        return "text", v[len("text="):]
+    if v.startswith("label="):
+        return "label", v[len("label="):]
+    if v.startswith("role:") or v.startswith("role="):
+        return "role", v.split(":", 1)[1] if ":" in v else v.split("=", 1)[1]
+    # Heuristics: brackets/IDs/classes → CSS; anything else → text.
+    if any(ch in v for ch in "[]#.>") or v.startswith((".", "#")) or "(" in v:
+        return "css", v
+    return "text", v
+
+
+async def _click_by_type(browser: Browser, sel_type: str | None, value: str) -> bool:
+    sel_type = (sel_type or "").lower() or _infer_selector_type(value)[0]
+    page = browser._page
+    if page is None:
+        return False
+    try:
+        if sel_type == "css":
+            await page.locator(value).first.click(timeout=6000)
             return True
-        except Exception:
-            continue
+        if sel_type == "text":
+            await page.get_by_text(value, exact=False).first.click(timeout=6000)
+            return True
+        if sel_type == "role":
+            role, _, name = value.partition(":")
+            role = role.strip() or "button"
+            name = name.strip()
+            await page.get_by_role(role, name=name).first.click(timeout=6000)
+            return True
+        if sel_type == "label":
+            await page.get_by_label(value).first.click(timeout=6000)
+            return True
+    except Exception as exc:
+        logger.warning("click(%s=%r) failed: %s", sel_type, value, exc)
     return False
 
 
-async def _click_css(self, selector: str, timeout: float = 5000) -> bool:
-    try:
-        await self._page.locator(selector).first.click(timeout=timeout)
-        return True
-    except Exception:
+async def _fill_by_type(browser: Browser, sel_type: str | None, value: str, text: str) -> bool:
+    sel_type = (sel_type or "").lower() or _infer_selector_type(value)[0]
+    page = browser._page
+    if page is None:
         return False
-
-
-def click_role_wrapper(self, selector):
-    """Returns an async callable to fit the click-tactic interface."""
-    async def _do(arg):
-        return await _click_role(self, selector)
-    return _do
-
-
-Browser.click_role_wrapper = click_role_wrapper  # type: ignore[attr-defined]
-Browser.click_css = _click_css  # type: ignore[attr-defined]
+    try:
+        if sel_type == "css":
+            await page.locator(value).first.fill(text, timeout=6000)
+            return True
+        if sel_type == "label":
+            await page.get_by_label(value).first.fill(text, timeout=6000)
+            return True
+        if sel_type == "role":
+            role, _, name = value.partition(":")
+            await page.get_by_role(role.strip() or "textbox", name=name.strip()).first.fill(
+                text, timeout=6000,
+            )
+            return True
+        if sel_type == "text":
+            # Fill via placeholder text or the closest input.
+            try:
+                await page.get_by_placeholder(value).first.fill(text, timeout=4000)
+                return True
+            except Exception:
+                pass
+            # Fallback: find input near a label-like text.
+            await page.get_by_label(value).first.fill(text, timeout=4000)
+            return True
+    except Exception as exc:
+        logger.warning("fill(%s=%r) failed: %s", sel_type, value, exc)
+    return False

@@ -25,43 +25,32 @@ _whisper_lock = asyncio.Lock()
 
 
 async def _get_whisper_model():
-    """Lazy-load local whisper; only used when OpenAI Whisper API isn't
-    configured. Requires `pip install openai-whisper` (heavy: pulls torch)."""
+    """Lazy-load faster-whisper. Model downloaded on first use (~150MB,
+    cached under ~/.cache/huggingface). Runs on CPU; ~2-5s for a 30s
+    voice note on a modest VPS."""
     global _whisper_model
     if _whisper_model is not None:
         return _whisper_model
     async with _whisper_lock:
         if _whisper_model is None:
             def _load():
-                import whisper
+                from faster_whisper import WhisperModel
 
-                return whisper.load_model("base")
+                # 'base' is the sweet spot for CPU + Spanish/English voice.
+                return WhisperModel("base", device="cpu", compute_type="int8")
             _whisper_model = await asyncio.to_thread(_load)
     return _whisper_model
 
 
 async def _transcribe(path: Path) -> str:
-    """Prefer OpenAI Whisper API when OPENAI_API_KEY is set (fast, accurate,
-    cheap at ~\$0.006/min). Falls back to local whisper if the package is
-    installed."""
-    if settings.openai_api_key:
-        try:
-            from openai import AsyncOpenAI
-
-            client = AsyncOpenAI(api_key=settings.openai_api_key)
-            with path.open("rb") as fh:
-                resp = await client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=fh,
-                )
-            return (resp.text or "").strip()
-        except Exception as exc:
-            logger.warning("OpenAI transcription failed: %s — trying local whisper", exc)
-
-    # Fallback: local whisper. Will raise ImportError if not installed.
+    """Local-only transcription via faster-whisper. Free, no API call."""
     model = await _get_whisper_model()
-    result = await asyncio.to_thread(model.transcribe, str(path))
-    return (result.get("text") or "").strip()
+
+    def _run() -> str:
+        segments, _info = model.transcribe(str(path), beam_size=5)
+        return " ".join(seg.text.strip() for seg in segments).strip()
+
+    return await asyncio.to_thread(_run)
 
 
 # --- Sending -----------------------------------------------------------------

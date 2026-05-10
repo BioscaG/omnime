@@ -45,6 +45,10 @@ playwright==1.49.1
 pypdf==5.1.0
 Pillow==11.0.0
 
+# Voice transcription — local Whisper via CTranslate2 (faster than openai-whisper,
+# no PyTorch dep, runs on CPU). Model downloaded on first use (~150 MB for 'base').
+faster-whisper==1.1.0
+
 # Utilities
 tenacity==9.0.0
 cachetools==5.5.0

@@ -119,6 +119,26 @@ class AgentStep:
     succeeded: Optional[bool] = None
 
 
+def _compress_image(path: Path, max_width: int = 1024, quality: int = 60) -> tuple[bytes, str]:
+    """Resize + JPEG-compress to keep Anthropic image tokens minimal."""
+    try:
+        from PIL import Image
+        import io as _io
+
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            if img.width > max_width:
+                ratio = max_width / img.width
+                new_size = (max_width, max(1, int(img.height * ratio)))
+                img = img.resize(new_size, Image.LANCZOS)
+            buf = _io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            return buf.getvalue(), "image/jpeg"
+    except Exception as exc:
+        logger.warning("image compression failed (%s) — sending raw", exc)
+        return path.read_bytes(), "image/png"
+
+
 @dataclass
 class AgentEvent:
     """Streamed back to the Telegram handler turn by turn."""
@@ -283,9 +303,10 @@ class BrowserAgentSkill(BaseSkill):
             await browser.close()
 
     # --- Internals ------------------------------------------------------
-    # Vision-capable models: Sonnet for default routing (cheaper), Opus only
-    # if the user explicitly opts in via env. Both support image inputs.
-    DEFAULT_MODEL_TIER = "fast"
+    @property
+    def DEFAULT_MODEL_TIER(self) -> str:
+        # Configurable via BROWSER_MODEL_TIER env. Default: tiny (Haiku 4.5).
+        return getattr(settings, "browser_model_tier", "tiny") or "tiny"
 
     async def _decide_next(
         self,
@@ -296,12 +317,13 @@ class BrowserAgentSkill(BaseSkill):
         user_id: int | None = None,
         failed_selectors: list[str] | None = None,
     ) -> AgentStep:
-        elements_block = json.dumps(state.interactive_elements[:30], indent=0)[:2000]
+        # Smaller context = cheaper. 18 elements + last 4 steps is enough.
+        elements_block = json.dumps(state.interactive_elements[:18], indent=0)[:1200]
         history_block = "\n".join(
             f"{i+1}. {h.action} {h.selector_type or ''}={h.selector or h.url or ''} "
             f"→ {'OK' if h.succeeded else 'FAILED' if h.succeeded is False else '?'}: "
-            f"{h.reasoning[:120]}"
-            for i, h in enumerate(history[-6:])
+            f"{h.reasoning[:100]}"
+            for i, h in enumerate(history[-4:])
         ) or "(none)"
 
         is_blocked = bool(re.search(
@@ -330,7 +352,7 @@ class BrowserAgentSkill(BaseSkill):
             blacklist=blacklist,
             url=state.url,
             title=state.title,
-            excerpt=state.text_excerpt[:1500],
+            excerpt=state.text_excerpt[:800],
             is_payment=state.looks_like_payment,
             is_blocked=is_blocked,
             elements=elements_block,
@@ -372,35 +394,37 @@ class BrowserAgentSkill(BaseSkill):
         )
 
     async def _call_with_vision(self, screenshot: Path | None, prompt: str) -> str:
-        # Default to Sonnet — has vision and is ~5× cheaper than Opus.
-        model = (
-            self.llm.model_powerful
-            if self.DEFAULT_MODEL_TIER == "powerful"
-            else self.llm.model_fast
-        )
+        tier = self.DEFAULT_MODEL_TIER
+        model = self.llm._model_for(tier)
         if screenshot is None or not screenshot.exists():
             return await self.llm.complete(
                 prompt=prompt,
                 system="You drive a browser. Reply with strict JSON only.",
-                model_tier=self.DEFAULT_MODEL_TIER,
-                max_tokens=800,
+                model_tier=tier,
+                max_tokens=600,
                 temperature=0.0,
             )
 
         from anthropic import AsyncAnthropic
 
         client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-        data = base64.standard_b64encode(screenshot.read_bytes()).decode()
+        # Resize + JPEG-compress to slash image-token cost (~2-3× cheaper).
+        img_bytes, media_type = _compress_image(
+            screenshot,
+            max_width=settings.browser_screenshot_width,
+            quality=settings.browser_screenshot_quality,
+        )
+        data = base64.standard_b64encode(img_bytes).decode()
         kwargs: dict[str, Any] = {
             "model": model,
-            "max_tokens": 800,
+            "max_tokens": 600,
             "system": "You drive a browser. Reply with strict JSON only.",
             "messages": [{
                 "role": "user",
                 "content": [
                     {
                         "type": "image",
-                        "source": {"type": "base64", "media_type": "image/png", "data": data},
+                        "source": {"type": "base64", "media_type": media_type, "data": data},
                     },
                     {"type": "text", "text": prompt},
                 ],

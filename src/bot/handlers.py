@@ -5,11 +5,12 @@ import logging
 from pathlib import Path
 
 from telegram import Update
-from telegram.constants import ChatAction, ParseMode
+from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from src.bot.middleware import authorize, rate_limit
 from src.config import settings
+from src.utils.formatters import chunk, safe_send
 
 
 logger = logging.getLogger(__name__)
@@ -21,14 +22,9 @@ async def _send_response(update: Update, response) -> None:
         return
 
     text = response.text or ""
-    if len(text) > 4000:
-        for chunk in (text[i:i + 4000] for i in range(0, len(text), 4000)):
-            await chat.send_message(chunk)
-    elif text:
-        try:
-            await chat.send_message(text, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            await chat.send_message(text)
+    if text:
+        for piece in chunk(text, size=3500):
+            await safe_send(chat.send_message, piece)
 
     if response.inline_buttons:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -72,15 +68,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     response = await orchestrator.process_message(user_id=user_id_db, message=msg.text)
 
+    await _send_response(update, response)
+
     memory.log_message(
         user_id=user_id_db,
         text=response.text,
         role="assistant",
         intent=response.intent.value if response.intent else None,
-        entities=response.metadata,
     )
-
-    await _send_response(update, response)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

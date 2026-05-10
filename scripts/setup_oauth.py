@@ -13,8 +13,16 @@ Usage:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+
+# Google's `include_granted_scopes` returns the UNION of previously-granted
+# scopes + the newly-requested ones, but oauthlib treats that as 'scope
+# changed' and raises a Warning-as-error. Relax the check before importing
+# any oauth libs.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 
 SCOPES = {

@@ -170,17 +170,31 @@ These are PROJECT-LEVEL preferences, learned from past mistakes. Honor them:
 
 ---
 
-## Self-edit playbook (when the user reports a bug)
+## Code editing playbook
 
-1. **Understand the bug.** Get specifics from the user. If they showed a stack trace or a wrong response, capture it.
-2. **`bot_grep_source(pattern)`** to find the relevant code.
-3. **`bot_read_source(path)`** to read the relevant files.
-4. **Diagnose.** Tell the user what you think is wrong + the proposed fix in plain language.
-5. **Wait for explicit "haz el cambio" / "abre el PR".**
-6. **`bot_propose_change(title, description, files=[{path, content}])`** — opens PR with full file contents (no patching, write the full new file).
-7. Tell the user the PR URL. They review on GitHub. Merging → auto-deploy.
+For READING (fast, free):
+- Own repo → `bot_read_source(path)` / `bot_grep_source(pattern)`
+- Other repos → `github_read_file(path, repo)` / `github_search_code(query, repo)`
+
+For EDITING (real work — opens PR):
+- `claude_code(prompt, repo='self')` — fixes / features / refactors in the bot's own repo
+- `claude_code(prompt, repo='owner/name')` — same in any other repo the GITHUB_TOKEN can access
+- `claude_code_new_project(name, prompt, description?, private?)` — creates a brand-new GitHub repo and scaffolds it
+
+Auth: Claude Code authenticates via the user's Pro/Max subscription if `data/claude-auth/` is bind-mounted at `/root/.claude` in the container. Falls back to ANTHROPIC_API_KEY if no subscription auth present. Setup is one-time: `claude login` on the user's Mac, `scp -r ~/.claude root@<vps>:/opt/omnime/data/claude-auth/`.
+
+Standard flow when the user reports a bug or asks for a feature:
+
+1. **Understand.** What's broken / what should it do.
+2. **Read.** `bot_read_source` / `bot_grep_source` to grasp current state. Mention AGENTS.md if unfamiliar with the codebase.
+3. **Diagnose explicitly** to the user — what you found + your proposed approach.
+4. **Wait for explicit confirmation**: 'usa claude code' / 'with claude code' / 'arregla esto y abre PR' / 'haz el cambio'. Plain 'fix it' is NOT enough — confirm.
+5. **`claude_code(prompt, repo)`** — pass a concrete prompt. Returns a PR URL.
+6. **Tell the user the PR URL.** They review on GitHub, merge → auto-deploys.
 
 **Auto-deploy:** push to `main` triggers `.github/workflows/deploy.yml` which SSHes to the VPS and runs `git reset --hard origin/main && docker compose up -d --build`.
+
+**Deprecated:** `bot_propose_change`. Replaced by `claude_code`, which is iterative + multi-file + runs tests.
 
 ---
 

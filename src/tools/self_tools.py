@@ -238,7 +238,9 @@ BOT_PROPOSE_CHANGE = Tool(
 
 
 def build_self_tools() -> list[Tool]:
-    """Self-edit tools always available — reading the source has no cost
-    beyond a disk read; bot_propose_change auto-disables when GitHub
-    isn't configured (returns an error string)."""
-    return [BOT_READ_SOURCE, BOT_GREP_SOURCE, BOT_PROPOSE_CHANGE]
+    """Self-introspection only — reading + greping the bot's own source.
+    For ACTUAL edits, the agent uses claude_code(repo='self') which is
+    much more capable (multi-file, runs tests, iterates). We keep
+    bot_read_source / bot_grep_source for cheap one-shot lookups before
+    deciding whether to invoke claude_code."""
+    return [BOT_READ_SOURCE, BOT_GREP_SOURCE]

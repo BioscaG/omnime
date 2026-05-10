@@ -205,3 +205,25 @@ class GitHubClient:
         issue = r.get_issue(number)
         comment = issue.create_comment(body)
         return {"id": comment.id, "url": comment.html_url}
+
+    def create_repo(
+        self,
+        name: str,
+        description: str = "",
+        private: bool = True,
+        auto_init: bool = True,
+    ) -> dict[str, Any]:
+        gh = self._build_gh()
+        user = gh.get_user()
+        repo = user.create_repo(
+            name=name,
+            description=description,
+            private=private,
+            auto_init=auto_init,
+        )
+        return {
+            "full_name": repo.full_name,
+            "url": repo.html_url,
+            "clone_url": repo.clone_url,
+            "private": repo.private,
+        }

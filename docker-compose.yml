@@ -13,6 +13,7 @@ services:
       - ./data/exports:/app/data/exports
       - ./data/backups:/app/data/backups
       - ./data/uploads:/app/data/uploads
+      - ./data/claude-auth:/root/.claude
       - ./prompts:/app/prompts
     networks:
       - omnime-net

@@ -56,6 +56,24 @@ RUN if [ "$WITH_BROWSER" = "1" ]; then \
       playwright install chromium; \
     fi
 
+# Node 20 + Claude Code CLI — used by the claude_code primitive for real
+# code editing (multi-file, runs tests, iterates). Authenticates via
+# either ANTHROPIC_API_KEY or a mounted ~/.claude/ folder (Pro/Max
+# subscription). Skip with --build-arg WITH_CLAUDE_CODE=0.
+ARG WITH_CLAUDE_CODE=1
+RUN if [ "$WITH_CLAUDE_CODE" = "1" ]; then \
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+      apt-get install -y --no-install-recommends nodejs && \
+      npm install -g @anthropic-ai/claude-code && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
+# Configure git inside the container so commits and PRs work non-interactively.
+RUN git config --global user.email "omnime-bot@users.noreply.github.com" && \
+    git config --global user.name "OMNIME Bot" 2>/dev/null || \
+    (apt-get update && apt-get install -y --no-install-recommends git && \
+     git config --global user.email "omnime-bot@users.noreply.github.com" && \
+     git config --global user.name "OMNIME Bot")
+
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY alembic/ ./alembic/

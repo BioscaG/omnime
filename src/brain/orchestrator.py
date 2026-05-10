@@ -328,21 +328,41 @@ class Orchestrator:
     AGENTIC_MAX_STEPS = 5
     AGENTIC_MODEL_TIER = "fast"  # Sonnet 4.6 — strong reasoning without Opus cost
 
+    # Email skills are HIDDEN from the agentic loop — they're rich UI for
+    # slash commands. The loop sees primitive tools (gmail_list, gmail_read,
+    # gmail_send, …) and composes responses itself, instead of receiving
+    # pre-formatted skill output.
+    _AGENTIC_SKILL_BLOCKLIST = {
+        "email_inbox", "email_read", "email_search", "email_composer",
+    }
+
     async def _run_agentic_loop(
         self,
         user_id: int,
         message: str,
         context: Context,
     ) -> Response:
-        """Multi-tool loop: the driver model picks a skill, the orchestrator
-        runs it, the result is fed back, until the model emits a final text
-        turn or the step cap is hit. Keeps the user informed via the merged
-        skill outputs."""
+        """Multi-tool loop: the driver model picks a tool (primitive) or a
+        skill (rich action), the orchestrator runs it, the result is fed
+        back, until the model emits a final text turn or the step cap is
+        hit."""
         registry = self.skill_registry
         if registry is None:
             return await self._handle_chat(user_id, message, context)
 
-        tools = registry.as_tools()
+        from src.tools import collect_default_tools, tool_to_def
+
+        primitive_tools = collect_default_tools()
+        primitives_by_name = {t.name: t for t in primitive_tools}
+
+        skill_tools = [
+            s for s in registry.list_enabled()
+            if s.name not in self._AGENTIC_SKILL_BLOCKLIST
+        ]
+
+        tools = [tool_to_def(t) for t in primitive_tools] + [
+            self._skill_to_tool_def(s) for s in skill_tools
+        ]
         if not tools:
             return await self._handle_chat(user_id, message, context)
 
@@ -421,12 +441,35 @@ class Orchestrator:
 
             tool_results: list[dict[str, Any]] = []
             for call in result.tool_calls:
+                # Primitive tool (returns string)?
+                if call.name in primitives_by_name:
+                    tool = primitives_by_name[call.name]
+                    try:
+                        out = await tool.run(call.input or {}, context)
+                    except Exception as exc:
+                        logger.exception("tool %s failed in agentic loop", tool.name)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": call.id,
+                            "content": f"Error: {exc}",
+                            "is_error": True,
+                        })
+                        continue
+                    skill_outputs.append((tool.name, type("StubSr", (), {"text": out, "inline_buttons": [], "files": []})()))
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": call.id,
+                        "content": (out or "(no result)")[:8000],
+                    })
+                    continue
+
+                # Skill (rich action, returns SkillResponse)
                 skill = registry.get(call.name)
                 if skill is None:
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": call.id,
-                        "content": f"(unknown skill: {call.name})",
+                        "content": f"(unknown tool: {call.name})",
                         "is_error": True,
                     })
                     continue
@@ -487,6 +530,15 @@ class Orchestrator:
         if not final_text:
             final_text = "I tried but didn't produce anything useful — try rephrasing?"
 
+        # Surface scheduled-send cancellation as inline buttons.
+        side = getattr(context, "_tool_side_effects", None) or {}
+        for sched in side.get("scheduled_sends", []):
+            cancel_row = [{
+                "text": f"❌ Cancel send → {sched.get('to')}",
+                "callback_data": f"email:scheduled_cancel:{sched['send_id']}",
+            }]
+            last_inline_buttons = (last_inline_buttons or []) + [cancel_row]
+
         return Response(
             text=final_text,
             intent=Intent.TASK,
@@ -496,6 +548,22 @@ class Orchestrator:
                 "agentic": True,
                 "steps": len(skill_outputs),
                 "skills_called": [name for name, _ in skill_outputs],
+            },
+        )
+
+    @staticmethod
+    def _skill_to_tool_def(skill):
+        """Wrap a Skill as a ToolDef for the agentic loop."""
+        from src.brain.llm_client import ToolDef
+
+        desc = skill.description + (
+            ("  Examples: " + " | ".join(skill.examples[:2])) if getattr(skill, "examples", None) else ""
+        )
+        return ToolDef(
+            name=skill.name,
+            description=desc,
+            input_schema=skill.input_schema or {
+                "type": "object", "properties": {}, "required": []
             },
         )
 

@@ -1,0 +1,61 @@
+"""Atomic capability primitives for the agentic loop.
+
+Skills (in ``src/skills/``) are *acciones pre-cocinadas* — they package an
+intent + execution + UI rendering and are invoked through slash commands.
+Tools, in contrast, are **primitives**: small, single-purpose functions
+that take typed args, do one thing, and return raw structured data
+(usually JSON-as-string). The agentic loop driver model sees a catalog of
+tools and *decides* which ones to compose for any given request.
+
+Example: instead of an opinionated ``email_inbox`` skill that always
+'lists 10 unread emails formatted with buttons', the email tools layer
+exposes ``gmail_list``, ``gmail_read``, ``gmail_search``, ``gmail_send`` —
+and the model itself composes the natural-language response from the data.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.brain.context_builder import Context
+
+
+@dataclass
+class Tool:
+    """A primitive capability invocable from the agentic loop."""
+
+    name: str
+    description: str
+    input_schema: dict
+    run: Callable[[dict, "Context"], Awaitable[str]]
+    """``run(args, context)`` — must return a string. JSON-string is preferred
+    for structured returns; the driver model handles JSON natively."""
+
+    side_effects: dict | None = None
+    """Optional metadata describing side effects of this tool (e.g.
+    ``{"sent_email_id": "..."}``). Set by ``run`` via context, not used by
+    the loop directly — used to inject UI hooks (cancel buttons, etc.)
+    into the orchestrator's final Response."""
+
+
+def tool_to_def(tool: Tool):
+    """Convert a Tool to the LLMClient's ToolDef so it can be passed to
+    Anthropic tool-use directly."""
+    from src.brain.llm_client import ToolDef
+
+    return ToolDef(
+        name=tool.name,
+        description=tool.description,
+        input_schema=tool.input_schema,
+    )
+
+
+def collect_default_tools() -> list[Tool]:
+    """Aggregate all built-in tool primitives. Hidden when their backing
+    integration is disabled (e.g. Gmail tools auto-hide if OAuth missing)."""
+    from src.tools.email_tools import build_email_tools
+
+    tools: list[Tool] = []
+    tools.extend(build_email_tools())
+    return tools

@@ -4,6 +4,32 @@ OMNIME no usa versionado semántico todavía — cada release está marcada por 
 commit. Esta es la lista cronológica de los hitos importantes desde que el
 proyecto pasó de scaffolding a su estado actual.
 
+## 2026-05-10 — primitive tool layer (data-first, model composes the response)
+
+The agentic loop no longer feeds **pre-cooked skill output** to Sonnet for
+email-related work. New `src/tools/` layer exposes Gmail as **primitives**:
+`gmail_list`, `gmail_read`, `gmail_search`, `gmail_send` (with default
+10-min delayed send + cancellation), `gmail_archive`, `gmail_mark_read`,
+`gmail_cancel_send`. Each returns raw JSON; the model interprets and
+writes the user-facing response itself.
+
+Why: when the user asked "tengo algún mail importante?", the prior
+`email_inbox` skill dumped a pre-formatted list of all 10 unread
+regardless of the question. Now the model calls `gmail_list`, looks at
+the JSON, applies its own judgment, and answers naturally — listing only
+relevant items, summarising, recommending.
+
+Email *skills* (`email_inbox` / `email_read` / `email_search` /
+`email_composer`) stay registered for slash commands (rich UI, buttons,
+fully formatted), but are blocklisted from the agentic loop's tool set.
+Non-email skills (browser_agent, cv_generator, web_fetch, …) remain in
+the loop unchanged — they're single-shot rich actions that don't benefit
+from primitive decomposition.
+
+Scheduled-send cancellation gets surfaced automatically: when the model
+calls `gmail_send` with a delay, the orchestrator detects the tool side
+effect and appends an inline Cancel button to the final response.
+
 ## 2026-05-10 — agentic multi-tool loop + tiered routing
 
 OMNIME now drives **multi-step compound requests** in a single message.

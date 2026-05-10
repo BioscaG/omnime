@@ -140,6 +140,95 @@ DRIVE_LIST = Tool(
 )
 
 
+async def _drive_download(args: dict, context: "Context") -> str:
+    """Pull a Drive file into data/uploads/ and register a FileRecord
+    so it shows up in /files and is usable by claude_code_analyze /
+    chat_send_file / files_search."""
+    client, err = _client_or_disabled()
+    if err:
+        return err
+    drive_id = (args.get("id") or "").strip()
+    if not drive_id:
+        return json.dumps({"error": "id is required"})
+
+    user_id = int(getattr(context, "user_id", 0) or 0)
+    save_as = (args.get("save_as") or "").strip()
+
+    try:
+        meta = client.get_metadata(drive_id)
+    except Exception as exc:
+        return json.dumps({"error": f"metadata fetch failed: {exc}"})
+    suggested = save_as or meta.get("name") or f"drive_{drive_id}.bin"
+
+    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+    target = Path(settings.uploads_dir) / suggested
+    # Avoid collision: append numeric suffix if needed.
+    base, dot, ext = target.name.partition(".")
+    i = 2
+    while target.exists():
+        target = target.parent / f"{base}_{i}.{ext}" if ext else target.parent / f"{base}_{i}"
+        i += 1
+
+    try:
+        actual = client.download(drive_id, target)
+    except Exception as exc:
+        return json.dumps({"error": f"download failed: {exc}"})
+
+    # Persist a FileRecord. Reuses the upsert dedup if telegram_file_id
+    # matches some prior upload (unlikely here but harmless).
+    from src.memory.db import session_scope
+    from src.memory.structured import StructuredStore
+
+    with session_scope() as s:
+        stored = StructuredStore(s).add_file(
+            user_id=user_id,
+            filename=actual.name,
+            file_type=meta.get("mimeType") or "application/octet-stream",
+            telegram_file_id=None,
+            extracted_text=None,
+            summary=f"Downloaded from Drive: {meta.get('name')}",
+            tags=["drive-download"],
+            extra_metadata={
+                "category": "drive",
+                "drive_id": drive_id,
+                "drive_url": meta.get("webViewLink"),
+                "size": meta.get("size"),
+                "title": meta.get("name"),
+            },
+        )
+        record_id = stored.id
+
+    return json.dumps({
+        "status": "downloaded",
+        "file_record_id": record_id,
+        "filename": actual.name,
+        "path": str(actual),
+        "size_kb": actual.stat().st_size // 1024,
+        "drive_url": meta.get("webViewLink"),
+    }, ensure_ascii=False)
+
+
+DRIVE_DOWNLOAD = Tool(
+    name="drive_download",
+    description=(
+        "Download a Drive file into data/uploads/ and register it as a "
+        "regular FileRecord so it can be opened with files_get, "
+        "analysed with claude_code_analyze, or sent to the user with "
+        "chat_send_file. Auto-exports Google natives (Docs → PDF, "
+        "Sheets → CSV, Slides → PDF). Returns the new file_record_id."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "description": "Drive file id, from drive_list / drive_find."},
+            "save_as": {"type": "string", "description": "Optional override for the local filename."},
+        },
+        "required": ["id"],
+    },
+    run=_drive_download,
+)
+
+
 async def _drive_share(args: dict, context: "Context") -> str:
     client, err = _client_or_disabled()
     if err:
@@ -329,7 +418,7 @@ def build_drive_tools() -> list[Tool]:
     except Exception:
         return []
     return [
-        DRIVE_UPLOAD, DRIVE_LIST, DRIVE_FIND,
+        DRIVE_UPLOAD, DRIVE_DOWNLOAD, DRIVE_LIST, DRIVE_FIND,
         DRIVE_CREATE_FOLDER, DRIVE_MOVE, DRIVE_DELETE,
         DRIVE_SHARE,
     ]

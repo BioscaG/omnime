@@ -128,13 +128,38 @@ class DriveClient:
         ).execute()
         return resp.get("files", [])
 
+    # MIME-type → export format for Google native files (Docs/Sheets/Slides).
+    # Plain binaries (PDF, images, .py, …) skip this and use get_media.
+    GOOGLE_NATIVE_EXPORTS = {
+        "application/vnd.google-apps.document": ("application/pdf", "pdf"),
+        "application/vnd.google-apps.spreadsheet": ("text/csv", "csv"),
+        "application/vnd.google-apps.presentation": ("application/pdf", "pdf"),
+        "application/vnd.google-apps.drawing": ("image/png", "png"),
+    }
+
     def download(self, file_id: str, local_path: Path | str) -> Path:
+        """Download a Drive file. Handles both regular binaries (PDF,
+        images, code, etc.) and Google-native formats (Docs / Sheets /
+        Slides) — natives are auto-exported (Doc → PDF, Sheet → CSV,
+        Slides → PDF, Drawing → PNG)."""
         from googleapiclient.http import MediaIoBaseDownload
 
         service = self._build()
         path = Path(local_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        request = service.files().get_media(fileId=file_id)
+
+        meta = self.get_metadata(file_id)
+        mime = meta.get("mimeType") or ""
+        export = self.GOOGLE_NATIVE_EXPORTS.get(mime)
+        if export:
+            export_mime, ext = export
+            # Append the export extension if the user didn't include one.
+            if path.suffix.lower() != f".{ext}":
+                path = path.with_suffix(f".{ext}")
+            request = service.files().export_media(fileId=file_id, mimeType=export_mime)
+        else:
+            request = service.files().get_media(fileId=file_id)
+
         buf = io.BytesIO()
         downloader = MediaIoBaseDownload(buf, request)
         done = False

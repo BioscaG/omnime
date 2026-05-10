@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # --- Self-evolution ---
     evolution_use_docker: bool = Field(default=True, alias="EVOLUTION_USE_DOCKER")
 
+    # --- Feature flags ---
+    enable_prompt_caching: bool = Field(default=True, alias="ENABLE_PROMPT_CACHING")
+    enable_streaming: bool = Field(default=True, alias="ENABLE_STREAMING")
+
     # --- General ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     timezone: str = Field(default="UTC", alias="TIMEZONE")

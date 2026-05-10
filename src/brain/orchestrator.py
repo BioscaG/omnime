@@ -281,7 +281,13 @@ class Orchestrator:
         system: str,
         max_tokens: int,
     ) -> str:
-        if stream_message is None or self.llm.provider != "anthropic":
+        from src.config import settings as _settings
+
+        if (
+            stream_message is None
+            or self.llm.provider != "anthropic"
+            or not _settings.enable_streaming
+        ):
             return await self.llm.complete(
                 prompt=prompt, system=system, model_tier="fast", max_tokens=max_tokens,
             )

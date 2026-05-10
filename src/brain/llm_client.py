@@ -368,13 +368,12 @@ class LLMClient:
         yield text
 
     @staticmethod
-    def _system_blocks(system: str | None, cache_system: bool) -> list[dict[str, Any]] | None:
+    def _system_blocks(system: str | None, cache_system: bool) -> list[dict[str, Any]] | str | None:
         if not system:
             return None
-        block: dict[str, Any] = {"type": "text", "text": system}
-        if cache_system:
-            block["cache_control"] = {"type": "ephemeral"}
-        return [block]
+        if not cache_system or not settings.enable_prompt_caching:
+            return system
+        return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
     def _record_usage(self, model: str, usage: Any) -> None:
         inp = getattr(usage, "input_tokens", 0) or 0
@@ -415,9 +414,19 @@ class LLMClient:
             "messages": [{"role": "user", "content": prompt}],
         }
         sys_blocks = self._system_blocks(system, cache_system)
-        if sys_blocks:
+        if sys_blocks is not None:
             kwargs["system"] = sys_blocks
-        resp = await client.messages.create(**kwargs)
+        try:
+            resp = await client.messages.create(**kwargs)
+        except Exception as exc:
+            # If cache_control was rejected by the SDK/API, retry once with a
+            # plain string system to keep the bot operational.
+            if cache_system and "cache_control" in str(exc).lower() and isinstance(sys_blocks, list):
+                logger.warning("cache_control rejected; retrying without caching")
+                kwargs["system"] = system
+                resp = await client.messages.create(**kwargs)
+            else:
+                raise
         text = "".join(block.text for block in resp.content if hasattr(block, "text"))
         if hasattr(resp, "usage"):
             self._record_usage(model, resp.usage)

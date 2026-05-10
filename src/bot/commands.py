@@ -116,6 +116,12 @@ async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _run_skill(update, context, "daily_briefing", "/briefing")
 
 
+async def cmd_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List + summarise unread Gmail messages."""
+    text = update.effective_message.text or "/inbox"
+    await _run_skill(update, context, "email_inbox", text)
+
+
 async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await authorize(update, context):
         return

@@ -104,6 +104,8 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("cv_for", commands.cmd_cv_for))
     application.add_handler(CommandHandler("email", commands.cmd_email))
     application.add_handler(CommandHandler("briefing", commands.cmd_briefing))
+    application.add_handler(CommandHandler("inbox", commands.cmd_inbox))
+    application.add_handler(CommandHandler("mail", commands.cmd_inbox))
     application.add_handler(CommandHandler("skills", commands.cmd_skills))
     application.add_handler(CommandHandler("evolve", commands.cmd_evolve))
     application.add_handler(CommandHandler("settings", commands.cmd_settings))

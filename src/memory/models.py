@@ -510,3 +510,17 @@ class UserPreference(Base):
     evidence_count: Mapped[int] = mapped_column(Integer, default=1)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Reminder(Base):
+    __tablename__ = "reminders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[Optional[str]] = mapped_column(Text)
+    linked_kind: Mapped[Optional[str]] = mapped_column(String(40))
+    linked_id: Mapped[Optional[int]] = mapped_column(Integer)
+    due_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

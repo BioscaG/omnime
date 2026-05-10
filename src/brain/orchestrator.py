@@ -272,24 +272,54 @@ class Orchestrator:
     def _spawn_background_extraction(self, user_id: int, message: str) -> None:
         """Fire-and-forget: extract entities from the user's message and
         persist any new facts. Runs in parallel with the agentic loop so
-        it never blocks the user-facing response."""
+        it never blocks the user-facing response. Logs a concise summary
+        when meaningful entities were captured — useful for confirming
+        in /tools or docker logs that memory is filling up."""
         if not message or len(message.strip()) < 12:
-            # Too short to plausibly contain an extractable fact.
             return
         try:
             import asyncio
 
             async def _runner() -> None:
                 try:
-                    await self.memory.process_and_store(
+                    result = await self.memory.process_and_store(
                         user_id=user_id, message=message, context_hint="",
                     )
                 except Exception as exc:
                     logger.debug("background extraction failed: %s", exc)
+                    return
+                summary = self._summarise_extraction_for_ack(result.extraction)
+                if summary:
+                    logger.info("background_extraction: %s", summary)
 
             asyncio.create_task(_runner())
         except Exception as exc:
             logger.debug("could not schedule background extraction: %s", exc)
+
+    @staticmethod
+    def _summarise_extraction_for_ack(extraction: Any) -> str:
+        """Compact 'saved X' summary, only mentioning meaningful captures.
+        Returns '' when nothing worth surfacing was extracted (saves noise)."""
+        bits: list[str] = []
+        for label, items in (
+            ("idea", extraction.ideas),
+            ("project", extraction.projects),
+            ("contact", extraction.contacts),
+            ("decision", extraction.decisions),
+            ("achievement", extraction.achievements),
+            ("life event", extraction.life_events),
+            ("book", extraction.books),
+            ("job", extraction.work_experience),
+            ("opportunity", extraction.job_opportunities),
+            ("health", extraction.health_events),
+            ("quote", extraction.quotes),
+        ):
+            n = len(items or [])
+            if n:
+                bits.append(f"{n} {label}{'s' if n > 1 else ''}")
+        if not bits:
+            return ""
+        return "💾 Saved to memory: " + ", ".join(bits)
 
     # --- Handlers ------------------------------------------------------
     async def _handle_store(self, user_id: int, message: str, context: Context) -> Response:

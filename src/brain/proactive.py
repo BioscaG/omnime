@@ -38,13 +38,15 @@ def _mark_pinged(key: tuple) -> None:
 
 
 SCANNER_PROMPT = """You are OMNIME's proactive scanner. You watch the user's
-streams (email, calendar, projects) and decide if any single item is
+streams (email, calendar, projects, ideas) and decide if any single item is
 worth interrupting them right now via Telegram.
 
 Bias toward SILENCE. Most checks should produce nothing. Only ping when:
 - An email needs a real reply within hours (not newsletters, not receipts).
 - An event is starting within 30-60 minutes that they likely forgot.
 - A project has had zero activity for >10 days and they care about it.
+- An idea was captured 5-30 days ago, looks promising, and the user hasn't
+  acted on it (mention which idea + suggest a small next step).
 - Something time-sensitive that benefits from a heads-up.
 
 Signals available:
@@ -117,6 +119,38 @@ async def collect_signals(memory, user_id: int) -> dict[str, Any]:
         ]
     except Exception as exc:
         logger.debug("scanner: project signals failed: %s", exc)
+
+    # Lingering ideas — captured 2-30 days ago that the user hasn't
+    # explored further. The agent decides whether any deserves a nudge.
+    try:
+        from datetime import timedelta as _td
+        from sqlalchemy import select as _sel
+
+        from src.memory import models as _m
+        from src.memory.db import session_scope as _scope
+
+        with _scope() as s:
+            cutoff_recent = datetime.utcnow() - _td(days=2)
+            cutoff_stale = datetime.utcnow() - _td(days=30)
+            rows = s.execute(
+                _sel(_m.Idea)
+                .where(_m.Idea.user_id == user_id)
+                .where(_m.Idea.created_at <= cutoff_recent)
+                .where(_m.Idea.created_at >= cutoff_stale)
+                .order_by(_m.Idea.created_at.desc())
+                .limit(10)
+            ).scalars().all()
+            signals["ideas"] = [
+                {
+                    "id": i.id,
+                    "content": (i.content or "")[:200],
+                    "captured_at": i.created_at.isoformat() if i.created_at else "",
+                    "tags": i.tags or [],
+                }
+                for i in rows
+            ]
+    except Exception as exc:
+        logger.debug("scanner: idea signals failed: %s", exc)
 
     return signals
 

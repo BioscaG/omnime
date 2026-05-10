@@ -283,6 +283,17 @@ def _schedule_jobs(application: Application, memory: MemoryManager, llm: LLMClie
     # Daily pattern extraction. First run after 6h post-boot.
     job_queue.run_repeating(pattern_learner_job, interval=24 * 60 * 60, first=6 * 60 * 60)
 
+    async def reminders_dispatcher_job(context):
+        try:
+            from src.brain.reminders import fire_due_reminders
+
+            await fire_due_reminders(application, user_id_db)
+        except Exception as exc:
+            logger.warning("Reminder dispatcher failed: %s", exc)
+
+    # Every 2 minutes — fine-grained enough that 'remind me in 5 min' feels timely.
+    job_queue.run_repeating(reminders_dispatcher_job, interval=2 * 60, first=60)
+
     if settings.backup_enabled:
         try:
             bhh, bmm = (int(x) for x in settings.backup_at.split(":"))

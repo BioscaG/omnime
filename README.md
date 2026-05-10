@@ -103,16 +103,37 @@ OMNIME learns who you are — your projects, skills, career history, contacts, i
    me - Show everything OMNIME knows about you
    search - Search your memory
    projects - List your projects
+   onboard - Run a 13-question onboarding interview
    cv - Generate your CV
    cv_for - Generate CV tailored to a job posting
+   cv_variants - A/B-test two CV styles for one role
+   gap - Skill gap analysis vs a job posting
+   prep - STAR-format interview prep for a role
+   jobs - List or update your job-opportunity pipeline
    email - Compose an email
    briefing - Get your daily briefing
+   review - Run your weekly review
+   journal - Adaptive journaling prompt + sentiment
+   goal - Track a new goal with streak detection
+   decisions - List past decisions
+   decide - Recall similar past decisions for a new dilemma
+   books - Reading list
+   graph - Render a Mermaid knowledge graph
+   timeline - Reconstruct what was true at a past date
+   plan - Agentic multi-step planner
+   private - One-off message via local Ollama (never touches Anthropic)
+   forget - Delete a memory entry with audit
+   fetch - Read a public URL and store its content
    export - Export your data
    skills - List OMNIME capabilities
    evolve - Add a new capability
    settings - Configure OMNIME
+   usage - Show LLM token usage and estimated cost
    backup - Create a backup
    ```
+
+> The full command reference with descriptions lives in
+> [`docs/COMMANDS.md`](docs/COMMANDS.md).
 
 ### 2. Get your Telegram User ID
 

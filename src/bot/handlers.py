@@ -78,9 +78,15 @@ async def _send_extras(chat, response) -> None:
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg_preview = (update.effective_message.text or "")[:80] if update.effective_message else ""
+    logger.info("handle_text: user_id=%s text=%r", user.id if user else "?", msg_preview)
+
     if not await authorize(update, context):
+        logger.warning("handle_text: rejected by authorize for user=%s", user.id if user else "?")
         return
     if not await rate_limit(update, context):
+        logger.warning("handle_text: rate-limited user=%s", user.id if user else "?")
         return
 
     msg = update.effective_message
@@ -89,6 +95,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     chat = update.effective_chat
     await chat.send_chat_action(ChatAction.TYPING)
+    logger.info("handle_text: dispatching to orchestrator")
 
     orchestrator = context.application.bot_data["orchestrator"]
     memory = context.application.bot_data["memory"]

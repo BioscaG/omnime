@@ -40,14 +40,18 @@ async def rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.exception("Bot error: %s", context.error)
+    import traceback as _tb
+
+    err = context.error
+    tb_text = "".join(_tb.format_exception(type(err), err, err.__traceback__)) if err else ""
+    logger.error("Bot error: %s\n%s", err, tb_text)
     try:
         if isinstance(update, Update) and update.effective_message:
             await update.effective_message.reply_text(
                 "⚠️ Something went wrong on my side. The error has been logged."
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("Failed to send error reply: %s", exc)
 
 
 def install(application: Application) -> None:

@@ -11,6 +11,8 @@ def configure_logging(level: str | None = None) -> None:
     lvl = (level or settings.log_level).upper()
     fmt = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
     logging.basicConfig(level=lvl, format=fmt, datefmt="%Y-%m-%d %H:%M:%S", stream=sys.stdout)
-    # Mute noisy third-party libraries
-    for noisy in ("httpx", "telegram.ext.Application", "asyncio", "chromadb", "sqlalchemy.engine"):
+    # Mute noisy third-party libraries but keep telegram updates visible.
+    for noisy in ("httpx", "asyncio", "chromadb", "sqlalchemy.engine"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.INFO)
+    logging.getLogger("telegram.ext").setLevel(logging.INFO)

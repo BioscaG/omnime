@@ -120,6 +120,20 @@ class AgentStep:
     succeeded: Optional[bool] = None
 
 
+_EXTRACTION_GOAL_PATTERNS = re.compile(
+    r"\b(extract|extrae|saca|captura|guarda|grab|store|pull|gather)\b.*"
+    r"\b(info|información|details|detalles|datos|profile|perfil|cv|sobre m[ií]|about me)\b|"
+    r"\b(my (profile|info|cv|about))\b|"
+    r"\b(actualiza mi perfil|fill my profile|sync my profile)\b",
+    re.I | re.S,
+)
+
+
+def _is_extraction_goal(goal: str) -> bool:
+    """Heuristic: did the user ask for the page content to be saved into memory?"""
+    return bool(_EXTRACTION_GOAL_PATTERNS.search(goal or ""))
+
+
 def _compress_image(path: Path, max_width: int = 1024, quality: int = 60) -> tuple[bytes, str]:
     """Resize + JPEG-compress to keep Anthropic image tokens minimal."""
     try:
@@ -281,7 +295,7 @@ class BrowserAgentSkill(BaseSkill):
                 history.append(step)
 
                 if step.action == "done":
-                    # Persist what worked so future sessions learn from this.
+                    # Persist the recipe + ask the LLM for site-specific notes.
                     try:
                         await self._learn_from_session(
                             user_id=context.user_id,
@@ -291,9 +305,35 @@ class BrowserAgentSkill(BaseSkill):
                         )
                     except Exception as exc:
                         logger.warning("Could not save recipe: %s", exc)
+
+                    # If the goal hints at extracting personal info, feed the
+                    # final page content to the entity extractor so
+                    # projects/skills/contacts/etc. land in structured memory.
+                    extraction_summary = ""
+                    if _is_extraction_goal(goal):
+                        try:
+                            content_dump = (
+                                f"Source: {state.url}\nTitle: {state.title}\n\n"
+                                f"{state.text_excerpt[:6000]}"
+                            )
+                            result = await self.memory.process_and_store(
+                                user_id=context.user_id,
+                                message=content_dump,
+                                context_hint=(
+                                    f"Content captured by browser agent on {state.url} "
+                                    f"with goal '{goal}'."
+                                ),
+                            )
+                            extraction_summary = result.stored_summary
+                        except Exception as exc:
+                            logger.warning("Browser extraction failed: %s", exc)
+
+                    done_text = f"✅ {step.reasoning}"
+                    if extraction_summary and extraction_summary != "nothing new":
+                        done_text += f"\n\n🧠 Stored in your profile: {extraction_summary}"
                     yield AgentEvent(
                         kind="done",
-                        text=f"✅ {step.reasoning}",
+                        text=done_text,
                         screenshot=state.screenshot_path,
                         step=step,
                     )

@@ -33,6 +33,72 @@ def _short_repr(value: Any, limit: int = 200) -> str:
     return s
 
 
+# Hallucination detector: regexes that match action-claim phrasings tied to
+# specific write tools. If the model's final text matches any of these but
+# the corresponding tool was NOT actually called this turn, we force one
+# more loop iteration that either makes the call or admits it didn't.
+_ACTION_CLAIMS: list[tuple[set[str], re.Pattern[str]]] = [
+    (
+        {"gmail_send"},
+        re.compile(
+            r"\b("
+            r"enviado|env[ií][oé]?|envi[ée]|mando|mand[ée]|"
+            r"sent|sending|just sent|on its way|"
+            r"programad[oa]|scheduled|"
+            r"(?:correo|email|mail|mensaje).{0,40}(?:enviad|programad|listo|sent|scheduled|on its way)|"
+            r"(?:enviad|programad|sent|scheduled).{0,30}(?:correo|email|mail|mensaje)"
+            r")\b",
+            re.I,
+        ),
+    ),
+    (
+        {"calendar_create"},
+        re.compile(
+            r"\b("
+            r"agendado|agendada|reservado|programada en (el )?calendar|"
+            r"created the event|added to (your )?calendar|booked|"
+            r"event scheduled|tienes (?:la )?reuni[oó]n agendada"
+            r")\b",
+            re.I,
+        ),
+    ),
+    (
+        {"memory_save"},
+        re.compile(
+            r"\b("
+            r"guardado en (?:tu )?(?:memoria|perfil)|saved to (?:your )?(?:memory|profile)|"
+            r"recordar[ée] (?:que|esto)|noted in your profile|"
+            r"a[ñn]adido a tu perfil"
+            r")\b",
+            re.I,
+        ),
+    ),
+    (
+        {"github_create_issue"},
+        re.compile(r"\b(issue created|created (an )?issue|abr[ií] (?:un )?issue)\b", re.I),
+    ),
+    (
+        {"notion_create_note"},
+        re.compile(r"\b(p[áa]gina creada en notion|notion page created|added to notion)\b", re.I),
+    ),
+]
+
+
+def _detect_hallucinated_action(final_text: str, called_tools: set[str]) -> str | None:
+    """Return a human-readable description of the hallucinated action, or
+    None if everything claimed in ``final_text`` is backed by a real
+    ``called_tools`` entry."""
+    if not final_text:
+        return None
+    for required, pattern in _ACTION_CLAIMS:
+        if pattern.search(final_text) and not (called_tools & required):
+            return (
+                f"You claimed an action matching {next(iter(required))} but "
+                f"didn't call any of {sorted(required)} this turn."
+            )
+    return None
+
+
 class Intent(str, Enum):
     STORE = "STORE"
     QUERY = "QUERY"
@@ -129,8 +195,11 @@ _FASTPATH_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
 
 # Trivial chat patterns — single words, greetings, acknowledgements. We dispatch
 # these straight to CHAT to skip the routing LLM call entirely.
+# NOTE: keep this list short. Confirmation tokens like 'si', 'ok', 'vale'
+# DO NOT belong here — they're often reply-to-action signals that need the
+# full agentic loop with tool access. Only obvious greetings/thanks live here.
 _TRIVIAL_CHAT = re.compile(
-    r"^\s*(hola|hi|hey|hello|buenos? (días|tardes|noches)|gracias|thanks|ok|vale|si|sí|no|"
+    r"^\s*(hola|hi|hey|hello|buenos? (días|tardes|noches)|gracias|thanks|"
     r"jaja|jeje|lol|👋|😀|🙂)\W*$",
     re.I,
 )
@@ -374,6 +443,10 @@ class Orchestrator:
         tools = [tool_to_def(t) for t in primitive_tools]
         if not tools:
             return await self._handle_chat(user_id, message, context)
+        logger.info(
+            "agentic_loop_start: user=%d tools_available=%d msg=%s",
+            user_id, len(tools), _short_repr(message, limit=120),
+        )
 
         capabilities = self._capabilities_block()
         learned_prefs = render_preferences_for_prompt(int(user_id), min_confidence=0.4)
@@ -569,6 +642,86 @@ class Orchestrator:
                 final_text = forced.text or ""
             except Exception as exc:
                 logger.warning("forced final-answer step failed: %s", exc)
+
+        # ANTI-HALLUCINATION: if the model claimed an action but didn't
+        # actually call the matching write tool, force one more turn that
+        # either makes the call or corrects the lie.
+        called_tool_names = {name for name, _ in skill_outputs}
+        hallucination = _detect_hallucinated_action(final_text or "", called_tool_names)
+        if hallucination:
+            logger.warning(
+                "agentic_hallucination_detected: %s | text=%s",
+                hallucination, _short_repr(final_text, limit=200),
+            )
+            try:
+                history.append({
+                    "role": "user",
+                    "content": (
+                        f"❗ HALLUCINATION CHECK FAILED: {hallucination} "
+                        "Either CALL the correct tool right now with the full "
+                        "arguments inferred from the conversation above, OR "
+                        "rewrite your previous message to honestly say you "
+                        "did NOT perform that action and ask the user to "
+                        "confirm/clarify. Do not repeat the false claim."
+                    ),
+                })
+                corrective = await self.llm.agentic_step(
+                    messages=history,
+                    tools=tools,
+                    system=system,
+                    model_tier=self.AGENTIC_MODEL_TIER,
+                    max_tokens=1500,
+                )
+                if corrective.tool_calls:
+                    history.append({"role": "assistant", "content": corrective.raw_content})
+                    new_results: list[dict[str, Any]] = []
+                    for call in corrective.tool_calls:
+                        logger.info(
+                            "corrective_tool_call: tool=%s args=%s",
+                            call.name, _short_repr(call.input),
+                        )
+                        tool = primitives_by_name.get(call.name)
+                        if tool is None:
+                            new_results.append({
+                                "type": "tool_result", "tool_use_id": call.id,
+                                "content": f"(unknown tool: {call.name})", "is_error": True,
+                            })
+                            continue
+                        t0 = time.monotonic()
+                        try:
+                            out = await tool.run(call.input or {}, context)
+                            ok = True
+                            err: Exception | None = None
+                        except Exception as exc:
+                            out = ""
+                            ok = False
+                            err = exc
+                        record_tool_call(
+                            user_id=user_id, tool_name=tool.name,
+                            args=call.input or {}, ok=ok,
+                            latency_ms=int((time.monotonic() - t0) * 1000),
+                            result_preview=out if ok else None,
+                            error=str(err) if err else None,
+                            turn_message=message,
+                        )
+                        skill_outputs.append((tool.name, out if ok else f"Error: {err}"))
+                        new_results.append({
+                            "type": "tool_result", "tool_use_id": call.id,
+                            "content": (out if ok else f"Error: {err}")[:8000],
+                            **({"is_error": True} if not ok else {}),
+                        })
+                    history.append({"role": "user", "content": new_results})
+                    # Force a final text turn after the corrective tool call.
+                    final_step = await self.llm.agentic_step(
+                        messages=history, tools=[], system=system,
+                        model_tier=self.AGENTIC_MODEL_TIER, max_tokens=900,
+                    )
+                    final_text = final_step.text or final_text
+                else:
+                    # No tool call — model rewrote text. Use the new text.
+                    final_text = corrective.text or final_text
+            except Exception as exc:
+                logger.warning("hallucination correction failed: %s", exc)
 
         if not final_text:
             final_text = "I tried but didn't produce anything useful — try rephrasing?"

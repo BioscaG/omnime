@@ -64,113 +64,33 @@ async def _flush_batch_after_delay(user_id: int) -> None:
     if not entries:
         return
 
-    # Single-file: run DocumentAnalyzer + entity extractor + rich receipt.
-    # Skip analyzer for code/markup; those benefit only from chunk-indexing.
-    if len(entries) == 1:
-        e = entries[0]
-        rel = e.get("rel_name") or ""
-        suffix = Path(rel).suffix.lower()
-        is_source = suffix in TEXT_SUFFIXES and suffix not in {".txt", ".md", ".csv"}
-        extracted = e.get("extracted") or ""
-        chunk_count = e.get("chunk_count", 0)
-        if not extracted:
-            await safe_send(chat.send_message, f"📄 Stored **{e.get('filename')}** (no text extracted).")
-            return
-        if is_source:
-            await safe_send(
-                chat.send_message,
-                f"📎 **{e.get('filename')}** stored ({chunk_count} chunk(s) indexed). "
-                "Ask me anything about it.",
-            )
-            return
-        # Heavy mode: standalone PDF / DOCX / etc. → run analysis.
-        try:
-            from src.skills.document_analyzer import DocumentAnalyzer
-            analyzer = DocumentAnalyzer(e.get("llm"))
-            analysis = await analyzer.analyze(extracted)
-        except Exception as exc:
-            logger.warning("DocumentAnalyzer failed: %s", exc)
-            analysis = None
-        # Update FileRecord with the analysis info.
-        try:
-            from sqlalchemy import select
-            from src.memory import models as _m
-            from src.memory.db import session_scope as _scope
-            with _scope() as s:
-                row = s.execute(
-                    select(_m.FileRecord).where(_m.FileRecord.id == e["file_id"])
-                ).scalar_one_or_none()
-                if row is not None and analysis is not None:
-                    row.summary = analysis.summary or row.summary
-                    row.tags = analysis.tags or row.tags
-                    md = dict(row.extra_metadata or {})
-                    md.update({
-                        "category": analysis.category,
-                        "title": analysis.title or e.get("filename"),
-                        "language": analysis.language,
-                        "key_entities": analysis.key_entities,
-                    })
-                    row.extra_metadata = md
-        except Exception as exc:
-            logger.debug("FileRecord enrich failed: %s", exc)
-
-        # Run entity extractor (background) on the document text.
-        extraction_summary = ""
-        if len(extracted) > 200:
-            try:
-                memory = e.get("memory")
-                result = await memory.process_and_store(
-                    user_id=e["user_id_db"],
-                    message=extracted[:8000],
-                    context_hint=(
-                        f"This text comes from an uploaded document "
-                        f"'{e.get('filename')}'."
-                    ),
-                )
-                extraction_summary = result.stored_summary
-            except Exception as exc:
-                logger.warning("entity extraction failed: %s", exc)
-
-        # Rich receipt.
-        title = (analysis.title if analysis else None) or e.get("filename")
-        category = (analysis.category if analysis else None) or "document"
-        bullets = [
-            f"📄 **{title}**",
-            f"Type: `{category}` · {chunk_count} chunk(s) indexed · saved to files",
-        ]
-        if analysis and analysis.tags:
-            bullets.append(f"Tags: {', '.join(analysis.tags)}")
-        if analysis and analysis.summary:
-            bullets.append(f"\n{analysis.summary}")
-        if analysis and analysis.key_entities:
-            bullets.append(f"\n_Mentioned: {', '.join(analysis.key_entities[:6])}_")
-        if extraction_summary and extraction_summary != "nothing new":
-            bullets.append(f"\n💾 Saved to memory: {extraction_summary}")
-        bullets.append("\n_Ask me anything about it later._")
-        try:
-            await safe_send(chat.send_message, "\n".join(bullets))
-        except Exception as exc:
-            logger.warning("batch flush single-file send failed: %s", exc)
-        return
-
-    # Multi-file: consolidated receipt.
+    # Receipt is always neutral — the agent decides what to do based on
+    # the user's next message. We don't pre-classify, don't run
+    # DocumentAnalyzer, don't run the entity extractor. The user might
+    # have uploaded their CV (extract personal info), a contract (extract
+    # clauses), a project (analyse as a whole), or just files to store.
+    # That's a Sonnet decision, not a hardcoded rule.
     sessions = sorted({e.get("session") for e in entries if e.get("session")})
-    session_label = sessions[0] if len(sessions) == 1 else "multiple"
+    session_label = sessions[0] if len(sessions) == 1 else "(multiple)"
     file_lines = [f"  · `{e.get('filename')}`" for e in entries[:20]]
     if len(entries) > 20:
         file_lines.append(f"  · _(+{len(entries) - 20} more)_")
-    ids = [e["file_id"] for e in entries if e.get("file_id") is not None]
-    summary = (
-        f"📦 **{len(entries)} files added** to `{session_label}/`\n\n"
-        + "\n".join(file_lines)
-        + "\n\n_All chunked + indexed for search. Tell me what you want "
-        "(e.g. 'analiza este proyecto', 'busca incoherencias entre los capítulos', "
-        "'extrae las citas') and I'll run Claude Code on the whole batch._"
-    )
+    if len(entries) == 1:
+        e = entries[0]
+        chunk_count = e.get("chunk_count", 0)
+        receipt = (
+            f"📎 **{e.get('filename')}** stored in `{session_label}/` "
+            f"({chunk_count} chunk(s) indexed)."
+        )
+    else:
+        receipt = (
+            f"📦 **{len(entries)} files** stored in `{session_label}/`\n\n"
+            + "\n".join(file_lines)
+        )
     try:
-        await safe_send(chat.send_message, summary)
+        await safe_send(chat.send_message, receipt)
     except Exception as exc:
-        logger.warning("batch flush consolidated send failed: %s", exc)
+        logger.warning("batch flush send failed: %s", exc)
     logger.info(
         "batch_flush: user=%d files=%d session=%s",
         user_id, len(entries), session_label,

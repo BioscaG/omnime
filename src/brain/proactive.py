@@ -1,13 +1,21 @@
 """Proactive scanner — autonomous pings about things worth your attention.
 
-Runs on a schedule (default every 30 min) per user. Uses the agentic loop
-in 'observation mode': pulls signals (urgent unread mail, calendar events
-in the next 4 hours, projects without updates in N days) and asks Sonnet
-whether anything justifies a Telegram ping. If yes, the bot sends a short
-proactive message — never a full dump.
+Two-stage flow:
 
-Throttled per signal-type with a 6-hour cooldown so the user isn't spammed
-when the same email/event keeps showing up.
+1. **Triage (Haiku, cheap)**: pulls signals (urgent unread mail, calendar
+   events in the next 4 hours, projects without updates, lingering ideas)
+   and asks: "is there anything here worth investigating further?"
+
+2. **Investigation (Sonnet + full tool catalog, only if triage says yes)**:
+   runs the agentic loop with the question "investigate the signal(s)
+   below, decide whether the user needs to be pinged, and if so write a
+   short, useful message". The loop can call gmail_read, memory_search,
+   calendar_list, web_search, etc. — same powers as a normal user turn.
+   This is what makes pings *useful* instead of just alerts: the bot can
+   read the actual email body, cross-reference with memory, and write a
+   recommendation, not a notification.
+
+Per-signal 6-hour cooldown stops the same item pinging twice.
 """
 from __future__ import annotations
 
@@ -37,29 +45,51 @@ def _mark_pinged(key: tuple) -> None:
     _LAST_PINGED[key] = time.time()
 
 
-SCANNER_PROMPT = """You are OMNIME's proactive scanner. You watch the user's
-streams (email, calendar, projects, ideas) and decide if any single item is
-worth interrupting them right now via Telegram.
+TRIAGE_PROMPT = """You are OMNIME's proactive triage. Decide whether the
+signals below warrant deeper investigation by the agent. We want to bias
+TOWARD silence — most ticks should produce nothing.
 
-Bias toward SILENCE. Most checks should produce nothing. Only ping when:
-- An email needs a real reply within hours (not newsletters, not receipts).
-- An event is starting within 30-60 minutes that they likely forgot.
+Greenlight investigation when ANY of these hold:
+- An email looks like it might need action (real human, not newsletter/receipt).
+- An event is starting within 60 minutes that the user might benefit from
+  preparing for (e.g. unread brief, no notes).
 - A project has had zero activity for >10 days and they care about it.
-- An idea was captured 5-30 days ago, looks promising, and the user hasn't
-  acted on it (mention which idea + suggest a small next step).
-- Something time-sensitive that benefits from a heads-up.
+- A captured idea (5-30 days old) looks promising and unactioned.
 
-Signals available:
+If you greenlight, return signal_ids the agent should focus on. If not,
+return an empty list — the agent won't run.
+
+Signals:
 {signals}
 
-Current user profile (for tone matching):
-{profile}
+Output strict JSON ONLY:
+{{"investigate": true|false, "focus_signal_ids": ["..."]}}
+"""
 
-Output strict JSON: {{"ping": true|false, "kind": "<email|event|project|other>",
-"signal_id": "<unique id of the thing being pinged about>",
-"message": "<short ping in user's language, 1-3 lines max>"}}
 
-If nothing warrants pinging, return {{"ping": false}}.
+INVESTIGATION_PROMPT = """The proactive scanner just flagged the following
+signal(s) as potentially worth pinging the user about. Investigate using
+your tools (gmail_read for emails, calendar_list for events, memory_search
+for context, web_fetch for links inside emails, etc.) and decide if the
+user actually needs to know.
+
+Greenlit signals:
+{signals}
+
+Today is {today_local}.
+
+Rules:
+- Investigate ONE signal at a time, deeply. Don't ping for everything.
+- If after investigating it's not actually important → say nothing
+  (write '<no ping>' as your final message and we'll skip).
+- If it IS worth interrupting the user → write a short Telegram message
+  (1-4 lines, in their language) that contains the actionable insight,
+  not a generic alert. E.g. NOT 'tienes un email de Anthropic', but
+  'Anthropic confirma la factura de mayo (€12). Ya está pagada — quizá
+  archivar.'
+- Be conversational, like a sharp colleague pinging you on Slack.
+- DON'T schedule new reminders here — that's not your job, this is just
+  a heads-up.
 """
 
 
@@ -156,7 +186,7 @@ async def collect_signals(memory, user_id: int) -> dict[str, Any]:
 
 
 async def proactive_scan(application, memory, llm, user_id: int) -> None:
-    """One scan tick. Builds signals → asks Sonnet → maybe pings the user."""
+    """Two-stage scan: cheap triage → deep agentic investigation when warranted."""
     if not settings.proactive_enabled:
         return
 
@@ -164,49 +194,80 @@ async def proactive_scan(application, memory, llm, user_id: int) -> None:
     if not any(signals.values()):
         return
 
-    profile = memory.get_user_profile(user_id) or {}
-    profile_block = (
-        profile.get("living_profile") or profile.get("bio") or "(unknown user)"
-    )[:600]
-
+    # Stage 1 — Haiku triage. Cheap.
     try:
-        raw = await llm.complete(
-            prompt=SCANNER_PROMPT.format(
+        triage_raw = await llm.complete(
+            prompt=TRIAGE_PROMPT.format(
                 signals=json.dumps(signals, ensure_ascii=False, default=str)[:4000],
-                profile=profile_block,
             ),
             system="You output strict JSON. No commentary outside the JSON.",
-            model_tier="tiny",  # Haiku — cheap; this runs every 30 min
-            max_tokens=300,
+            model_tier="tiny",
+            max_tokens=200,
             temperature=0.2,
         )
     except Exception as exc:
-        logger.warning("proactive_scan LLM call failed: %s", exc)
+        logger.warning("proactive triage failed: %s", exc)
         return
 
-    raw = (raw or "").strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.lower().startswith("json"):
-            raw = raw[4:]
+    triage = _safe_json(triage_raw)
+    if not triage or not triage.get("investigate"):
+        return
+
+    focus_ids = [str(x) for x in (triage.get("focus_signal_ids") or [])]
+    focus_signals = _filter_signals(signals, focus_ids) if focus_ids else signals
+    if not any(focus_signals.values()):
+        return
+
+    # Cooldown: only investigate if at least one of the focus items hasn't
+    # been pinged recently.
+    cooldown_key = (user_id, "investigate", json.dumps(focus_ids, sort_keys=True))
+    if _was_recently_pinged(cooldown_key):
+        logger.debug("scanner: cooldown active, skipping")
+        return
+
+    # Stage 2 — invoke the agentic loop directly. The orchestrator's loop
+    # already has the full primitive catalog; we just inject a synthetic
+    # user message describing the investigation task.
+    orchestrator = (application.bot_data or {}).get("orchestrator")
+    if orchestrator is None:
+        logger.warning("scanner: orchestrator not in bot_data; cannot investigate")
+        return
+
+    from datetime import datetime, timezone
     try:
-        decision = json.loads(raw)
+        from zoneinfo import ZoneInfo
+        now_local = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Madrid"))
     except Exception:
-        logger.debug("scanner: bad JSON from LLM: %r", raw[:200])
+        now_local = datetime.now(timezone.utc)
+
+    investigation_prompt = INVESTIGATION_PROMPT.format(
+        signals=json.dumps(focus_signals, ensure_ascii=False, default=str)[:4000],
+        today_local=now_local.strftime("%A %d %B %Y, %H:%M"),
+    )
+
+    try:
+        # Use the orchestrator's agentic loop directly. This gives the
+        # scanner the full primitive catalog (gmail_read, memory_search,
+        # calendar_list, web_fetch, …) and proper conversation handling
+        # (tools/responses round-trip cleanly).
+        from src.brain.context_builder import Context
+
+        context = await orchestrator.context_builder.build(user_id, investigation_prompt)
+        # Use a separate conversation thread for the scanner so its history
+        # doesn't pollute the user's normal chat thread. Hack: bias the user
+        # id to a negative space.
+        scanner_user_id = -user_id
+        context.user_id = scanner_user_id
+        response = await orchestrator._run_agentic_loop(
+            scanner_user_id, investigation_prompt, context,
+        )
+    except Exception as exc:
+        logger.warning("scanner agentic investigation failed: %s", exc)
         return
 
-    if not decision.get("ping"):
-        return
-
-    kind = (decision.get("kind") or "other").lower()
-    signal_id = decision.get("signal_id") or ""
-    message = (decision.get("message") or "").strip()
-    if not message:
-        return
-
-    key = (user_id, kind, signal_id)
-    if _was_recently_pinged(key):
-        logger.debug("scanner: cooldown still active for %s, skipping", key)
+    final_text = (response.text or "").strip()
+    if not final_text or "<no ping>" in final_text.lower():
+        logger.info("scanner: investigation completed, no ping warranted")
         return
 
     chat_id = settings.proactive_chat_id or settings.telegram_user_id or 0
@@ -222,10 +283,35 @@ async def proactive_scan(application, memory, llm, user_id: int) -> None:
 
         await application.bot.send_message(
             chat_id=chat_id,
-            text=to_telegram_html(f"🛰 _Proactive_\n\n{message}"),
+            text=to_telegram_html(f"🛰 <b>Proactive</b>\n\n{final_text}"),
             parse_mode=ParseMode.HTML,
         )
-        _mark_pinged(key)
-        logger.info("scanner: pinged user about %s/%s", kind, signal_id[:30])
+        _mark_pinged(cooldown_key)
+        logger.info("scanner: pinged user after investigation: %s", final_text[:120])
     except Exception as exc:
         logger.warning("scanner: send_message failed: %s", exc)
+
+
+def _safe_json(raw: str) -> dict:
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:]
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def _filter_signals(signals: dict, focus_ids: list[str]) -> dict:
+    """Subset signals to only items whose id matches the focus list. Falls
+    through gracefully when the schema doesn't expose ids per item."""
+    out: dict = {}
+    for stream, items in signals.items():
+        if not isinstance(items, list):
+            out[stream] = items
+            continue
+        kept = [it for it in items if str(it.get("id") or it.get("name") or "") in focus_ids]
+        out[stream] = kept or items  # fall back to full stream if no ids match
+    return out

@@ -248,5 +248,107 @@ MEMORY_REMIND = Tool(
 )
 
 
+async def _memory_list_reminders(args: dict, context: "Context") -> str:
+    user_id = int(getattr(context, "user_id", 0) or 0)
+    only_pending = bool(args.get("only_pending", True))
+    try:
+        from sqlalchemy import select
+        from src.memory import models as mm
+        from src.memory.db import session_scope
+
+        with session_scope() as s:
+            stmt = (
+                select(mm.Reminder)
+                .where(mm.Reminder.user_id == user_id)
+                .order_by(mm.Reminder.due_at)
+                .limit(int(args.get("limit") or 30))
+            )
+            if only_pending:
+                stmt = stmt.where(mm.Reminder.delivered_at.is_(None))
+            rows = s.execute(stmt).scalars().all()
+            return json.dumps({
+                "count": len(rows),
+                "reminders": [
+                    {
+                        "id": r.id,
+                        "content": r.content,
+                        "context": r.context,
+                        "due_at": r.due_at.isoformat() if r.due_at else None,
+                        "delivered_at": r.delivered_at.isoformat() if r.delivered_at else None,
+                        "linked_kind": r.linked_kind,
+                        "linked_id": r.linked_id,
+                    }
+                    for r in rows
+                ],
+            }, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+MEMORY_LIST_REMINDERS = Tool(
+    name="memory_list_reminders",
+    description="List the user's scheduled reminders. By default returns only pending (undelivered).",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "only_pending": {"type": "boolean", "default": True},
+            "limit": {"type": "integer", "default": 30, "minimum": 1, "maximum": 100},
+        },
+        "required": [],
+    },
+    run=_memory_list_reminders,
+)
+
+
+async def _memory_cancel_reminder(args: dict, context: "Context") -> str:
+    rid = args.get("id")
+    if rid is None:
+        return json.dumps({"error": "id is required"})
+    user_id = int(getattr(context, "user_id", 0) or 0)
+    try:
+        from sqlalchemy import select
+        from src.memory import models as mm
+        from src.memory.db import session_scope
+
+        with session_scope() as s:
+            r = s.execute(
+                select(mm.Reminder)
+                .where(mm.Reminder.id == int(rid))
+                .where(mm.Reminder.user_id == user_id)
+            ).scalar_one_or_none()
+            if r is None:
+                return json.dumps({"error": f"reminder {rid} not found"})
+            if r.delivered_at is not None:
+                return json.dumps({"status": "already_delivered", "id": r.id})
+            s.delete(r)
+        return json.dumps({"status": "cancelled", "id": int(rid)})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+MEMORY_CANCEL_REMINDER = Tool(
+    name="memory_cancel_reminder",
+    description=(
+        "Cancel a pending reminder. Use when the user says 'cancela el "
+        "recordatorio de X' or 'ya no hace falta'. Resolve the id by "
+        "calling memory_list_reminders first if not given."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"id": {"type": "integer"}},
+        "required": ["id"],
+    },
+    run=_memory_cancel_reminder,
+)
+
+
 def build_memory_tools() -> list[Tool]:
-    return [MEMORY_SEARCH, MEMORY_SAVE, MEMORY_RECALL_PROFILE, MEMORY_RECENT_MESSAGES, MEMORY_REMIND]
+    return [
+        MEMORY_SEARCH,
+        MEMORY_SAVE,
+        MEMORY_RECALL_PROFILE,
+        MEMORY_RECENT_MESSAGES,
+        MEMORY_REMIND,
+        MEMORY_LIST_REMINDERS,
+        MEMORY_CANCEL_REMINDER,
+    ]

@@ -48,6 +48,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("browse:"):
         await _handle_browse_callback(query, context, data)
         return
+    if data.startswith("reminder:"):
+        await _handle_reminder_callback(query, context, data)
+        return
     await query.edit_message_text(f"Action received: {data}")
 
 
@@ -320,6 +323,36 @@ def _inline(rows: list[list[dict[str, str]]]):
         for row in rows
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+async def _handle_reminder_callback(query, context, data: str) -> None:
+    parts = data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "cancel":
+        rid = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        if not rid:
+            await _edit_html(query, "Reminder id missing.")
+            return
+        user_id_db = context.application.bot_data.get("user_id_db") or 0
+        from sqlalchemy import select
+        from src.memory import models as mm
+        from src.memory.db import session_scope
+
+        with session_scope() as s:
+            r = s.execute(
+                select(mm.Reminder).where(mm.Reminder.id == rid).where(mm.Reminder.user_id == user_id_db)
+            ).scalar_one_or_none()
+            if r is None:
+                await _edit_html(query, f"Recordatorio #{rid} no encontrado.")
+                return
+            if r.delivered_at is not None:
+                await _edit_html(query, f"Recordatorio #{rid} ya entregado, no se puede cancelar.")
+                return
+            content = r.content
+            s.delete(r)
+        await _edit_html(query, f"❌ Recordatorio cancelado: _{content[:80]}_")
+        return
+    await _edit_html(query, f"Reminder action: {action}")
 
 
 async def _handle_evolve_callback(query, context, data: str) -> None:

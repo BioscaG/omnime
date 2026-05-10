@@ -173,6 +173,51 @@ async def cmd_search_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _run_skill(update, context, "email_search", text)
 
 
+async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List pending reminders with cancel buttons."""
+    if not await authorize(update, context):
+        return
+    user_id_db = context.application.bot_data["user_id_db"]
+    from sqlalchemy import select
+    from src.memory import models as mm
+    from src.memory.db import session_scope
+    from src.utils.formatters import to_telegram_html
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.constants import ParseMode
+
+    with session_scope() as s:
+        rows = s.execute(
+            select(mm.Reminder)
+            .where(mm.Reminder.user_id == user_id_db)
+            .where(mm.Reminder.delivered_at.is_(None))
+            .order_by(mm.Reminder.due_at)
+            .limit(30)
+        ).scalars().all()
+        items = [
+            {"id": r.id, "content": r.content, "due_at": r.due_at}
+            for r in rows
+        ]
+
+    if not items:
+        await safe_send(update.effective_message.reply_text, "No tienes recordatorios pendientes.")
+        return
+
+    lines = [f"**⏰ {len(items)} recordatorio(s) pendientes:**\n"]
+    keyboard: list[list[InlineKeyboardButton]] = []
+    for it in items:
+        due = it["due_at"].strftime("%d %b %H:%M") if it["due_at"] else "?"
+        lines.append(f"• _{due}_ — {it['content'][:120]}")
+        keyboard.append([InlineKeyboardButton(
+            f"❌ Cancelar #{it['id']} · {it['content'][:30]}",
+            callback_data=f"reminder:cancel:{it['id']}",
+        )])
+    await update.effective_message.reply_text(
+        to_telegram_html("\n".join(lines)),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Forget the current conversation thread (start a fresh agentic session)."""
     if not await authorize(update, context):

@@ -235,6 +235,51 @@ GH_CREATE_ISSUE = Tool(
 )
 
 
+async def _gh_create_repo(args: dict, context: "Context") -> str:
+    c, err = _client_or_disabled()
+    if err:
+        return err
+    name = (args.get("name") or "").strip()
+    if not name:
+        return json.dumps({"error": "name is required"})
+    description = (args.get("description") or "").strip()
+    private = bool(args.get("private", True))
+    auto_init = bool(args.get("auto_init", True))
+    try:
+        result = c.create_repo(
+            name=name,
+            description=description,
+            private=private,
+            auto_init=auto_init,
+        )
+        return json.dumps({"status": "created", **result}, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+GH_CREATE_REPO = Tool(
+    name="github_create_repo",
+    description=(
+        "Create a new GitHub repo on the user's account. Defaults to "
+        "private + auto_init (so it has an initial commit on main). "
+        "Confirm name + visibility with the user before calling — "
+        "creating a public repo accidentally leaks code. After creating, "
+        "you can scaffold it with claude_code or push code to it manually."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Repo name (kebab-case ideal)."},
+            "description": {"type": "string"},
+            "private": {"type": "boolean", "default": True},
+            "auto_init": {"type": "boolean", "default": True, "description": "Initialise with empty README + main branch."},
+        },
+        "required": ["name"],
+    },
+    run=_gh_create_repo,
+)
+
+
 async def _gh_comment_issue(args: dict, context: "Context") -> str:
     c, err = _client_or_disabled()
     if err:
@@ -282,6 +327,7 @@ def build_github_tools() -> list[Tool]:
         GH_SEARCH_CODE,
         GH_LIST_ISSUES,
         GH_LIST_PULLS,
+        GH_CREATE_REPO,
         GH_CREATE_ISSUE,
         GH_COMMENT_ISSUE,
     ]

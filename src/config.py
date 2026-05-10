@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     gcal_client_secret: str = Field(default="", alias="GCAL_CLIENT_SECRET")
     gcal_refresh_token: str = Field(default="", alias="GCAL_REFRESH_TOKEN")
 
+    # --- Google Drive (workspace folder for bot-created files) ---
+    gdrive_client_id: str = Field(default="", alias="GDRIVE_CLIENT_ID")
+    gdrive_client_secret: str = Field(default="", alias="GDRIVE_CLIENT_SECRET")
+    gdrive_refresh_token: str = Field(default="", alias="GDRIVE_REFRESH_TOKEN")
+    gdrive_workspace_folder_id: str = Field(default="", alias="GDRIVE_WORKSPACE_FOLDER_ID",
+                                             description="Drive folder id where the bot stores user-facing files. Optional — if blank, files land in the user's Drive root under 'OMNIME/' (auto-created).")
+
     # --- GitHub ---
     github_token: str = Field(default="", alias="GITHUB_TOKEN")
     github_repo: str = Field(default="", alias="GITHUB_REPO")

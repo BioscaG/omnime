@@ -92,6 +92,12 @@ def build_application() -> Application:
     application.bot_data["context_builder"] = ContextBuilder(memory)
     application.bot_data["skill_registry"] = skill_registry
     application.bot_data["orchestrator"] = orchestrator
+
+    # Make the Application reachable from primitives (chat_send_file etc.)
+    # without threading it through every signature.
+    from src.bot.runtime import set_application
+
+    set_application(application)
     application.bot_data["evolution_engine"] = evolution_engine
 
     middleware.install(application)

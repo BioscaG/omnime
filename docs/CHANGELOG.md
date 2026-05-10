@@ -37,6 +37,40 @@ New tables (migration 0006): ``tool_calls`` and ``user_preferences``.
 New commands: `/tools [Nh]`. New scheduler jobs: pattern_learner_job
 (daily, 6h after boot).
 
+## 2026-05-10 — Workspace from any device: Drive sync + Notion + Telegram file sends
+
+User wanted the bot's outputs (drafts, fetched docs, generated CVs) to be
+accessible from phone/desktop without going through Telegram every time,
+plus the option for the bot to push attachments back into the chat.
+
+NEW INTEGRATIONS:
+- DriveClient (src/integrations/drive_client.py): wraps Google Drive v3.
+  Auto-creates an 'OMNIME' folder in the user's Drive root on first use
+  (or honours GDRIVE_WORKSPACE_FOLDER_ID). Same scope-omission trick as
+  Gmail/Calendar to avoid invalid_scope on refresh.
+- Config: GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REFRESH_TOKEN /
+  GDRIVE_WORKSPACE_FOLDER_ID.
+
+NEW TOOLS:
+- drive_upload(file_record_id|filename) — push a stored file to Drive
+- drive_list(query?) — list/search OMNIME folder
+- drive_share_link(id) — generate anyone-with-link URL (gated by the
+  prompt: only on explicit user request)
+- chat_send_file(file_record_id|filename, caption?) — bot pushes a file
+  as a Telegram document attachment back to the user, e.g. when they say
+  'mándame el archivo'
+
+INFRASTRUCTURE:
+- src/bot/runtime.py — process-wide singleton for the Telegram
+  Application so primitives running in async tasks can reach the bot
+  without the orchestrator passing it through every signature.
+- chat_send_file uses this to call application.bot.send_document().
+
+Notion was already wired (notion_search / notion_read_page /
+notion_create_note from previous commits) — now combined with Drive
+they form a workspace: PDFs/images go to Drive, structured notes to
+Notion, and either is one Telegram message away via chat_send_file.
+
 ## 2026-05-10 — DIOS reach: calendar/notion/github primitives + proactive scanner + longer loop
 
 The bot now spans the full life: email + memory + web + **calendar +

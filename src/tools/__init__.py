@@ -75,6 +75,8 @@ def collect_default_tools(skill_registry=None) -> list[Tool]:
     from src.tools.notion_tools import build_notion_tools
     from src.tools.github_tools import build_github_tools
     from src.tools.files_tools import build_files_tools
+    from src.tools.drive_tools import build_drive_tools
+    from src.tools.chat_tools import build_chat_tools
     from src.tools.skill_adapter import wrap_skill_as_tool
 
     tools: list[Tool] = []
@@ -82,6 +84,8 @@ def collect_default_tools(skill_registry=None) -> list[Tool]:
     tools.extend(build_calendar_tools())
     tools.extend(build_memory_tools())
     tools.extend(build_files_tools())
+    tools.extend(build_drive_tools())
+    tools.extend(build_chat_tools())
     tools.extend(build_web_tools())
     tools.extend(build_notion_tools())
     tools.extend(build_github_tools())

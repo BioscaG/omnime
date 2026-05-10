@@ -93,6 +93,26 @@ class Settings(BaseSettings):
     enable_prompt_caching: bool = Field(default=True, alias="ENABLE_PROMPT_CACHING")
     enable_streaming: bool = Field(default=True, alias="ENABLE_STREAMING")
 
+    # --- Backups ---
+    backup_enabled: bool = Field(default=True, alias="BACKUP_ENABLED")
+    backup_at: str = Field(default="03:00", alias="BACKUP_AT")
+    backup_keep: int = Field(default=14, alias="BACKUP_KEEP")
+    # Off-site target. Pick ONE.
+    #   none / s3 / b2 / scp / rclone
+    backup_remote: str = Field(default="none", alias="BACKUP_REMOTE")
+    # S3-compatible (also used by B2 with custom endpoint)
+    s3_bucket: str = Field(default="", alias="S3_BUCKET")
+    s3_prefix: str = Field(default="omnime", alias="S3_PREFIX")
+    s3_endpoint: str = Field(default="", alias="S3_ENDPOINT")
+    s3_access_key: str = Field(default="", alias="S3_ACCESS_KEY")
+    s3_secret_key: str = Field(default="", alias="S3_SECRET_KEY")
+    s3_region: str = Field(default="auto", alias="S3_REGION")
+    # SCP target (e.g. "user@host:/path")
+    scp_target: str = Field(default="", alias="SCP_TARGET")
+    scp_key_path: str = Field(default="", alias="SCP_KEY_PATH")
+    # Rclone remote (e.g. "gdrive:omnime/backups")
+    rclone_remote: str = Field(default="", alias="RCLONE_REMOTE")
+
     # --- General ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     timezone: str = Field(default="UTC", alias="TIMEZONE")

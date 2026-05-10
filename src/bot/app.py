@@ -242,6 +242,35 @@ def _schedule_jobs(application: Application, memory: MemoryManager, llm: LLMClie
     job_queue.run_repeating(notion_sync_job, interval=60 * 60 * 6, first=60 * 30)
     job_queue.run_daily(birthday_reminder_job, time=dtime_(hour=8, minute=15))
 
+    if settings.backup_enabled:
+        try:
+            bhh, bmm = (int(x) for x in settings.backup_at.split(":"))
+        except Exception:
+            bhh, bmm = 3, 0
+
+        async def backup_job(context):
+            try:
+                from scripts.backup import run_backup
+
+                path = run_backup()
+                logger.info("Daily backup written: %s", path)
+                if settings.backup_remote != "none":
+                    await context.bot.send_message(
+                        chat_id=settings.telegram_user_id,
+                        text=f"💾 Backup uploaded ({settings.backup_remote}): `{path.name}`",
+                    )
+            except Exception as exc:
+                logger.error("Daily backup job failed: %s", exc)
+                try:
+                    await context.bot.send_message(
+                        chat_id=settings.telegram_user_id,
+                        text=f"⚠️ Daily backup FAILED: {exc}",
+                    )
+                except Exception:
+                    pass
+
+        job_queue.run_daily(backup_job, time=dtime_(hour=bhh, minute=bmm))
+
 
 def run() -> None:
     application = build_application()

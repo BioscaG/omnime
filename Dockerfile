@@ -14,8 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libpq-dev \
+    postgresql-client \
     curl \
     ffmpeg \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-extras.txt ./

@@ -109,6 +109,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("read", commands.cmd_read_email))
     application.add_handler(CommandHandler("search_mail", commands.cmd_search_email))
     application.add_handler(CommandHandler("scheduled_emails", commands.cmd_scheduled_emails))
+    application.add_handler(CommandHandler("tools", commands.cmd_tools_dashboard))
     application.add_handler(CommandHandler("skills", commands.cmd_skills))
     application.add_handler(CommandHandler("evolve", commands.cmd_evolve))
     application.add_handler(CommandHandler("settings", commands.cmd_settings))
@@ -269,6 +270,17 @@ def _schedule_jobs(application: Application, memory: MemoryManager, llm: LLMClie
             interval=settings.proactive_interval_minutes * 60,
             first=5 * 60,
         )
+
+    async def pattern_learner_job(context):
+        try:
+            from src.brain.pattern_learner import run_pattern_learner
+
+            await run_pattern_learner(memory, llm, user_id_db)
+        except Exception as exc:
+            logger.warning("Pattern learner failed: %s", exc)
+
+    # Daily pattern extraction. First run after 6h post-boot.
+    job_queue.run_repeating(pattern_learner_job, interval=24 * 60 * 60, first=6 * 60 * 60)
 
     if settings.backup_enabled:
         try:

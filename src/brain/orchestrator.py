@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
@@ -12,12 +13,24 @@ from typing import TYPE_CHECKING
 from src.brain.context_builder import Context, ContextBuilder
 from src.brain.llm_client import LLMClient, ToolDef
 from src.brain.prompts import build_system_prompt
+from src.memory.observability import record_tool_call, render_preferences_for_prompt
 
 if TYPE_CHECKING:
     from src.memory.manager import MemoryManager
 
 
 logger = logging.getLogger(__name__)
+
+
+def _short_repr(value: Any, limit: int = 200) -> str:
+    """Compact repr for logging tool inputs/outputs without flooding the log."""
+    try:
+        s = str(value)
+    except Exception:
+        return "<unrepr>"
+    if len(s) > limit:
+        s = s[:limit] + f"…[+{len(s) - limit}ch]"
+    return s
 
 
 class Intent(str, Enum):
@@ -350,12 +363,17 @@ class Orchestrator:
             return await self._handle_chat(user_id, message, context)
 
         capabilities = self._capabilities_block()
+        learned_prefs = render_preferences_for_prompt(int(user_id), min_confidence=0.4)
+        prefs_block = (
+            "\nLEARNED USER PREFERENCES (from observed behaviour):\n" + learned_prefs
+            if learned_prefs else ""
+        )
         system = build_system_prompt(
             user_name=context.profile.get("name"),
             living_profile=context.living_profile,
             communication_style=context.profile.get("communication_style"),
             capabilities=capabilities,
-            extra=(
+            extra=(prefs_block +
                 "\nYou are operating as a fully agentic personal assistant. "
                 "Every capability is exposed to you as a TOOL primitive — "
                 "Gmail CRUD (gmail_list, gmail_read, gmail_send, ...), memory "
@@ -375,6 +393,19 @@ class Orchestrator:
                 "  (gmail_send): default delay_minutes is 10 so the user "
                 "  can cancel; honour that unless they explicitly say "
                 "  'send now'.\n\n"
+                "ANTI-HALLUCINATION RULES (NON-NEGOTIABLE):\n"
+                "- NEVER claim an action happened unless you actually called "
+                "  the matching tool in THIS turn and saw a successful "
+                "  result. 'Sent', 'Enviado', 'Scheduled', 'Created', 'Saved' "
+                "  → these MUST be backed by a real tool call this turn. "
+                "  If the user says 'send it' / 'envíalo' / 'do it' and you "
+                "  haven't called gmail_send yet, CALL IT before claiming "
+                "  it's sent. No exceptions.\n"
+                "- If a tool call failed (error result), report the failure "
+                "  honestly. Don't paper over it.\n"
+                "- When the user instructs an action like 'send it' after a "
+                "  draft you composed, your next move is ALWAYS calling the "
+                "  corresponding write tool — not writing a confirmation.\n\n"
                 "FINAL-ANSWER RULES:\n"
                 "1. NEVER end without a final text turn. After tool calls, "
                 "   write the user-facing answer.\n"
@@ -443,8 +474,19 @@ class Orchestrator:
 
             tool_results: list[dict[str, Any]] = []
             for call in result.tool_calls:
+                logger.info(
+                    "agentic_tool_call: step=%d tool=%s args=%s",
+                    step, call.name, _short_repr(call.input),
+                )
                 tool = primitives_by_name.get(call.name)
                 if tool is None:
+                    logger.warning("agentic_tool_call: UNKNOWN tool %s", call.name)
+                    record_tool_call(
+                        user_id=user_id, tool_name=call.name,
+                        args=call.input or {}, ok=False, latency_ms=None,
+                        result_preview=None, error=f"unknown tool: {call.name}",
+                        turn_message=message,
+                    )
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": call.id,
@@ -452,17 +494,35 @@ class Orchestrator:
                         "is_error": True,
                     })
                     continue
+                t0 = time.monotonic()
+                err: Exception | None = None
+                out = ""
                 try:
                     out = await tool.run(call.input or {}, context)
                 except Exception as exc:
-                    logger.exception("tool %s failed in agentic loop", tool.name)
+                    err = exc
+                    logger.exception("agentic_tool_call: %s FAILED", tool.name)
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                record_tool_call(
+                    user_id=user_id, tool_name=tool.name,
+                    args=call.input or {}, ok=err is None,
+                    latency_ms=latency_ms,
+                    result_preview=out if err is None else None,
+                    error=str(err) if err else None,
+                    turn_message=message,
+                )
+                if err is not None:
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": call.id,
-                        "content": f"Error: {exc}",
+                        "content": f"Error: {err}",
                         "is_error": True,
                     })
                     continue
+                logger.info(
+                    "agentic_tool_call: %s OK %dms result=%s",
+                    tool.name, latency_ms, _short_repr(out, limit=300),
+                )
                 skill_outputs.append((tool.name, out))
                 tool_results.append({
                     "type": "tool_result",

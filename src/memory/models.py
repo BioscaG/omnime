@@ -481,3 +481,32 @@ class FileRecord(Base):
     tags: Mapped[Optional[list[str]]] = mapped_column(JSONB)
     extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class ToolCall(Base):
+    __tablename__ = "tool_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    tool_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    args: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    result_preview: Mapped[Optional[str]] = mapped_column(Text)
+    turn_message: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    key: Mapped[str] = mapped_column(String(120), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    evidence_count: Mapped[int] = mapped_column(Integer, default=1)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

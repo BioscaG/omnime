@@ -134,6 +134,43 @@ async def cmd_search_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _run_skill(update, context, "email_search", text)
 
 
+async def cmd_tools_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show recent tool-call usage and any failures."""
+    if not await authorize(update, context):
+        return
+    user_id_db = context.application.bot_data["user_id_db"]
+    args_text = " ".join(context.args or []).strip().lower()
+    hours = 24
+    if args_text.endswith("h") and args_text[:-1].isdigit():
+        hours = int(args_text[:-1])
+    elif args_text.isdigit():
+        hours = int(args_text)
+    from src.memory.observability import recent_failures, tool_usage_summary
+    from src.utils.formatters import to_telegram_html
+    from telegram.constants import ParseMode
+
+    summary = tool_usage_summary(user_id_db, hours=hours)
+    failures = recent_failures(user_id_db, n=5)
+
+    lines = [f"**🛠 Tool usage — last {summary['hours']}h**",
+             f"Total calls: **{summary['total_calls']}** · Failures: **{summary['failures']}**\n"]
+    if not summary["breakdown"]:
+        lines.append("_No tool calls in this window._")
+    else:
+        lines.append("**Breakdown:**")
+        for row in summary["breakdown"][:15]:
+            avg = f"{row['avg_ms']}ms" if row.get("avg_ms") else "—"
+            lines.append(f"- `{row['tool']}` · {row['calls']} calls · avg {avg}")
+    if failures:
+        lines.append("\n**Recent failures:**")
+        for f in failures:
+            lines.append(f"- `{f['tool']}` _{f['when']}_: {(f['error'] or '')[:120]}")
+    await update.effective_message.reply_text(
+        to_telegram_html("\n".join(lines)),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def cmd_scheduled_emails(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List emails scheduled to send shortly, with cancel buttons."""
     if not await authorize(update, context):

@@ -4,6 +4,39 @@ OMNIME no usa versionado semántico todavía — cada release está marcada por 
 commit. Esta es la lista cronológica de los hitos importantes desde que el
 proyecto pasó de scaffolding a su estado actual.
 
+## 2026-05-10 — observability + pattern learning + anti-hallucination
+
+Three things glued together because they all matter for trust:
+
+**Observability** — every primitive call gets persisted with args,
+latency, success/error, and a result preview into a new ``tool_calls``
+table. New `/tools` command renders a 24h dashboard (override window
+with `/tools 6h`) showing total calls, failures, breakdown by tool,
+and the last 5 errors. The agentic loop also emits INFO logs
+(`agentic_tool_call: tool=X args=… OK 250ms result=…`) so we can spot
+hallucinated confirmations vs real executions.
+
+**Pattern learning** — new daily APScheduler job runs Haiku over the
+last ~50 messages and ~200 tool calls, extracts durable preferences
+(response style, cadence, tool preferences), and upserts them into
+``user_preferences`` with confidence-by-evidence. Confidence rises
+with repeated observation. The agentic loop's system prompt now
+includes preferences with confidence ≥ 0.4 so future turns honour
+them automatically.
+
+**Anti-hallucination** — Sonnet was caught claiming "Enviado ✓" without
+calling gmail_send (real conversation: the user typed "envíalo", model
+faked the confirmation). Beefed up the loop's system prompt with
+non-negotiable rules: action-claim words ("sent", "scheduled",
+"created", "saved") must be backed by a real tool call this turn; if
+the user says "send it", the next move is a gmail_send call, not a
+text confirmation. Combined with the new observability we'll catch
+recurrences immediately.
+
+New tables (migration 0006): ``tool_calls`` and ``user_preferences``.
+New commands: `/tools [Nh]`. New scheduler jobs: pattern_learner_job
+(daily, 6h after boot).
+
 ## 2026-05-10 — DIOS reach: calendar/notion/github primitives + proactive scanner + longer loop
 
 The bot now spans the full life: email + memory + web + **calendar +

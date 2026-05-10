@@ -191,7 +191,7 @@ async def cmd_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ]
 
     if not items:
-        await safe_send(update.effective_message.reply_text, "No hay archivos guardados que coincidan.")
+        await safe_send(update.effective_message.reply_text, "No saved files matched.")
         return
 
     # Group by category.
@@ -205,7 +205,7 @@ async def cmd_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "whiteboard": "🧑‍🏫", "note": "📝", "other": "📂",
     }
 
-    lines = [f"**📂 {len(items)} archivos** ({len(by_cat)} categoría(s))"]
+    lines = [f"**📂 {len(items)} files** ({len(by_cat)} categor{'ies' if len(by_cat) != 1 else 'y'})"]
     for cat, group in by_cat.items():
         lines.append(f"\n{icon.get(cat, '📂')} **{cat}** — {len(group)}")
         for it in group[:8]:
@@ -214,7 +214,7 @@ async def cmd_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if it["summary"]:
                 lines.append(f"     {it['summary'][:140]}")
 
-    lines.append("\n_Tip: '/files <categoría>' para filtrar; el agente puede buscar contenido con files_search._")
+    lines.append("\n_Tip: '/files <category>' to filter; the agent can search content with files_search._")
     await update.effective_message.reply_text(
         to_telegram_html("\n".join(lines)),
         parse_mode=ParseMode.HTML,
@@ -247,16 +247,16 @@ async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ]
 
     if not items:
-        await safe_send(update.effective_message.reply_text, "No tienes recordatorios pendientes.")
+        await safe_send(update.effective_message.reply_text, "No pending reminders.")
         return
 
-    lines = [f"**⏰ {len(items)} recordatorio(s) pendientes:**\n"]
+    lines = [f"**⏰ {len(items)} pending reminder(s):**\n"]
     keyboard: list[list[InlineKeyboardButton]] = []
     for it in items:
         due = it["due_at"].strftime("%d %b %H:%M") if it["due_at"] else "?"
         lines.append(f"• _{due}_ — {it['content'][:120]}")
         keyboard.append([InlineKeyboardButton(
-            f"❌ Cancelar #{it['id']} · {it['content'][:30]}",
+            f"❌ Cancel #{it['id']} · {it['content'][:30]}",
             callback_data=f"reminder:cancel:{it['id']}",
         )])
     await update.effective_message.reply_text(
@@ -305,17 +305,17 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not arg:
         current = agentic_model_tier()
         if current == AUTO:
-            mode_line = "**Modo:** `auto` — heurística decide por mensaje"
+            mode_line = "**Mode:** `auto` — heuristic picks per message"
         else:
-            mode_line = f"**Modo:** override manual `{current}` — {TIER_LABELS[current]}"
+            mode_line = f"**Mode:** manual override `{current}` — {TIER_LABELS[current]}"
         lines = [
             mode_line + "\n",
-            "**Cambiar con:**",
-            "- `/model auto` — vuelve a heurística (recomendado)",
-            "- `/model haiku` — fuerza Haiku (barato)",
-            "- `/model sonnet` — fuerza Sonnet",
-            "- `/model opus` — fuerza Opus (máxima calidad)",
-            "\n_Heurística:_ mensajes simples → Haiku · compose / acciones → Sonnet · self-edit → Opus.",
+            "**Switch with:**",
+            "- `/model auto` — back to heuristic (recommended)",
+            "- `/model haiku` — force Haiku (cheap)",
+            "- `/model sonnet` — force Sonnet",
+            "- `/model opus` — force Opus (top quality)",
+            "\n_Heuristic:_ simple messages → Haiku · compose / writes → Sonnet · self-edit → Opus.",
         ]
         await safe_send(update.effective_message.reply_text, "\n".join(lines))
         return
@@ -323,16 +323,16 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if target is None:
         await safe_send(
             update.effective_message.reply_text,
-            f"No reconozco `{arg}`. Usa: auto / haiku / sonnet / opus.",
+            f"Unknown: `{arg}`. Use: auto / haiku / sonnet / opus.",
         )
         return
     set_agentic_model_tier(target)
     if target == AUTO:
-        msg = "✅ Modo `auto` — heurística decide por mensaje desde el próximo."
+        msg = "✅ Mode `auto` — heuristic picks per message from now on."
     else:
         msg = (
-            f"✅ Override `{target}` activo — {TIER_LABELS[target]}.\n"
-            "_Vuelve a heurística con `/model auto` cuando quieras._"
+            f"✅ Override `{target}` active — {TIER_LABELS[target]}.\n"
+            "_Back to heuristic anytime with `/model auto`._"
         )
     await safe_send(update.effective_message.reply_text, msg)
 

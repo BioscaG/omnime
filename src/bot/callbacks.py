@@ -343,14 +343,14 @@ async def _handle_reminder_callback(query, context, data: str) -> None:
                 select(mm.Reminder).where(mm.Reminder.id == rid).where(mm.Reminder.user_id == user_id_db)
             ).scalar_one_or_none()
             if r is None:
-                await _edit_html(query, f"Recordatorio #{rid} no encontrado.")
+                await _edit_html(query, f"Reminder #{rid} not found.")
                 return
             if r.delivered_at is not None:
-                await _edit_html(query, f"Recordatorio #{rid} ya entregado, no se puede cancelar.")
+                await _edit_html(query, f"Reminder #{rid} already delivered, can't cancel.")
                 return
             content = r.content
             s.delete(r)
-        await _edit_html(query, f"❌ Recordatorio cancelado: _{content[:80]}_")
+        await _edit_html(query, f"❌ Reminder cancelled: _{content[:80]}_")
         return
     await _edit_html(query, f"Reminder action: {action}")
 

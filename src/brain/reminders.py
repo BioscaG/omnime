@@ -53,9 +53,9 @@ async def fire_due_reminders(application, user_id: int) -> int:
         fired = 0
         for r in rows:
             try:
-                msg = f"⏰ <b>Recordatorio</b>\n\n{r.content}"
+                msg = f"⏰ <b>Reminder</b>\n\n{r.content}"
                 if r.context:
-                    msg += f"\n\n<i>Contexto: {r.context[:200]}</i>"
+                    msg += f"\n\n<i>Context: {r.context[:200]}</i>"
                 await application.bot.send_message(
                     chat_id=chat_id, text=to_telegram_html(msg),
                     parse_mode=ParseMode.HTML,

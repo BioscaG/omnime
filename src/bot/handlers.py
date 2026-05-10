@@ -205,7 +205,19 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     extracted = await asyncio.to_thread(_extract_text, path)
     memory = context.application.bot_data["memory"]
     user_id_db = context.application.bot_data["user_id_db"]
+    llm = context.application.bot_data["llm"]
 
+    if not extracted:
+        await safe_send(chat.send_message, f"📄 Stored **{doc.file_name}** (no text extracted).")
+        return
+
+    # 1. Classify + summarise the document.
+    from src.skills.document_analyzer import DocumentAnalyzer, chunk_text
+
+    analyzer = DocumentAnalyzer(llm)
+    analysis = await analyzer.analyze(extracted)
+
+    # 2. Persist the file row with rich metadata.
     from src.memory.db import session_scope
     from src.memory.structured import StructuredStore
 
@@ -215,24 +227,62 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             filename=doc.file_name,
             file_type=doc.mime_type,
             telegram_file_id=doc.file_id,
-            extracted_text=extracted[:50000] if extracted else None,
+            extracted_text=extracted[:50000],
+            summary=analysis.summary or None,
+            tags=analysis.tags or None,
+            extra_metadata={
+                "category": analysis.category,
+                "title": analysis.title,
+                "language": analysis.language,
+                "key_entities": analysis.key_entities,
+            },
         )
 
-    if extracted:
+    # 3. Chunk the full text and index every chunk semantically.
+    chunks = chunk_text(extracted, target_chars=1800, overlap=200)
+    for i, chunk_text_value in enumerate(chunks):
         try:
             memory.semantic.add(
                 collection="documents",
-                text=extracted[:5000],
-                metadata={"user_id": user_id_db, "filename": doc.file_name or "unknown"},
+                text=chunk_text_value,
+                metadata={
+                    "user_id": user_id_db,
+                    "filename": doc.file_name or "unknown",
+                    "category": analysis.category,
+                    "chunk": i,
+                    "of": len(chunks),
+                },
             )
         except Exception as exc:
-            logger.warning("Document semantic indexing failed: %s", exc)
+            logger.warning("Document chunk %d indexing failed: %s", i, exc)
 
-    summary = (
-        extracted[:600] + ("..." if extracted and len(extracted) > 600 else "")
-        if extracted else "(no text extracted)"
-    )
-    await safe_send(chat.send_message, f"📄 Stored **{doc.file_name}**.\n\n{summary}")
+    # 4. If the document is about the user, run the entity extractor over it.
+    extraction_summary = ""
+    if analysis.should_extract_personal:
+        try:
+            result = await memory.process_and_store(
+                user_id=user_id_db,
+                message=extracted[:8000],  # cap to keep extractor cost predictable
+                context_hint=f"This text comes from an uploaded document classified as '{analysis.category}'.",
+            )
+            extraction_summary = result.stored_summary
+        except Exception as exc:
+            logger.warning("Personal extraction from document failed: %s", exc)
+
+    # 5. Reply with a structured receipt.
+    bullets: list[str] = []
+    bullets.append(f"📄 **{analysis.title or doc.file_name}**")
+    bullets.append(f"Type: `{analysis.category}` · {len(chunks)} chunk(s) indexed")
+    if analysis.tags:
+        bullets.append(f"Tags: {', '.join(analysis.tags)}")
+    if analysis.summary:
+        bullets.append(f"\n{analysis.summary}")
+    if analysis.key_entities:
+        bullets.append(f"\n_Mentioned: {', '.join(analysis.key_entities[:6])}_")
+    if extraction_summary and extraction_summary != "nothing new":
+        bullets.append(f"\n✅ Extracted into your profile: {extraction_summary}")
+
+    await safe_send(chat.send_message, "\n".join(bullets))
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

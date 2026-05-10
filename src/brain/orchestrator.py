@@ -84,7 +84,8 @@ ROUTING_TOOLS: list[ToolDef] = [
 _FASTPATH_PATTERNS: list[tuple[Intent, re.Pattern[str]]] = [
     (Intent.EVOLVE, re.compile(r"^\s*evolve[:\s]", re.I)),
     (Intent.EVOLVE, re.compile(r"\b(add the ability|teach yourself|new skill|learn how)\b", re.I)),
-    (Intent.TASK, re.compile(r"^/(cv|cv_for|email|briefing|research|review|code)\b", re.I)),
+    (Intent.TASK, re.compile(r"^/(cv|cv_for|email|briefing|research|review|code|fetch|url|scrape)\b", re.I)),
+    (Intent.TASK, re.compile(r"^https?://", re.I)),
     (Intent.QUERY, re.compile(r"^\s*(what|who|when|where|which|how many) (did|do|are|is|was) i\b", re.I)),
     (Intent.QUERY, re.compile(r"^\s*(qué|quién|cuándo|dónde|cuáles|cuántos) (hice|tengo|son|fue|trabajé)\b", re.I)),
     (Intent.QUERY, re.compile(r"^/search\b", re.I)),

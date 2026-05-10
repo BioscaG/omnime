@@ -45,6 +45,7 @@ COMMAND_DESCRIPTIONS = [
     ("settings", "Configure OMNIME"),
     ("backup", "Create a backup"),
     ("usage", "Show LLM token usage and estimated cost"),
+    ("fetch", "Read a public URL and store its content"),
 ]
 
 
@@ -114,6 +115,8 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("voice", commands.cmd_voice_reply))
     application.add_handler(CommandHandler("plan", commands.cmd_plan))
     application.add_handler(CommandHandler("agent", commands.cmd_plan))
+    application.add_handler(CommandHandler("fetch", commands.cmd_fetch))
+    application.add_handler(CommandHandler("url", commands.cmd_fetch))
 
     application.add_handler(CallbackQueryHandler(callbacks.handle_callback))
     application.add_handler(InlineQueryHandler(inline.handle_inline_query))

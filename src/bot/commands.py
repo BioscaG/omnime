@@ -247,6 +247,17 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_skill(update, context, "agentic", "/plan " + goal)
 
 
+async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fetch a public URL and process it."""
+    if not await authorize(update, context):
+        return
+    if not context.args:
+        await safe_send(update.effective_message.reply_text, "Usage: /fetch <url>")
+        return
+    url = " ".join(context.args)
+    await _run_skill(update, context, "web_fetch", "/fetch " + url)
+
+
 async def cmd_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle whether the next reply also gets a TTS voice note."""
     if not await authorize(update, context):

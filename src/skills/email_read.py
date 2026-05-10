@@ -53,6 +53,20 @@ class EmailReadSkill(BaseSkill):
         "open the email from my landlord",
         "abre el #3",
     ]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "hint": {
+                "type": "string",
+                "description": "Natural-language reference to the email ('the one from Anthropic', '#3', 'el de Renfe').",
+            },
+            "message_id": {
+                "type": "string",
+                "description": "Gmail message ID. Use this when known (e.g. from a previous tool result).",
+            },
+        },
+        "required": [],
+    }
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm

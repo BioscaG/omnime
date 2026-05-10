@@ -44,6 +44,21 @@ class WebFetchSkill(BaseSkill):
         "aquí tienes mi web https://guidobiosca.com saca info y guarda lo relevante",
         "read this article and tell me the gist: https://example.com/post",
     ]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Public URL to fetch (must start with http:// or https://).",
+            },
+            "save_to_memory": {
+                "type": "boolean",
+                "description": "If true, run the entity extractor and store relevant facts about the user (default true).",
+                "default": True,
+            },
+        },
+        "required": ["url"],
+    }
 
     MAX_BYTES = 4 * 1024 * 1024  # 4 MB cap on download
     TIMEOUT = 20.0

@@ -50,6 +50,28 @@ class SkillRegistry:
     def enabled_names(self) -> list[str]:
         return [s.name for s in self.list_enabled()]
 
+    def as_tools(self) -> list:
+        """Return a list of ``ToolDef``s — one per enabled skill — for the
+        agentic multi-tool loop. The skill's ``input_schema`` becomes the
+        tool's input schema, so the driver model can extract structured
+        args (e.g. ``email_composer(to, reply_to_id, instruction)``)."""
+        from src.brain.llm_client import ToolDef
+
+        tools = []
+        for s in self.list_enabled():
+            tools.append(
+                ToolDef(
+                    name=s.name,
+                    description=s.description + (
+                        ("  Examples: " + " | ".join(s.examples[:2])) if s.examples else ""
+                    ),
+                    input_schema=s.input_schema or {
+                        "type": "object", "properties": {}, "required": []
+                    },
+                )
+            )
+        return tools
+
     def get(self, name: str) -> Optional[BaseSkill]:
         return self._skills.get(name)
 

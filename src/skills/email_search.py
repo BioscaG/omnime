@@ -59,6 +59,16 @@ class EmailSearchSkill(BaseSkill):
         "busca correos de Renfe del mes pasado",
         "find emails from glovo about job offers",
     ]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query — either Gmail's native syntax (from:x@y.com after:2025/01/01) or natural language ('emails from Renfe last month').",
+            },
+        },
+        "required": ["query"],
+    }
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm

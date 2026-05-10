@@ -117,6 +117,32 @@ class EmailComposerSkill(BaseSkill):
         "redacta un email a Marc cancelando la reunión del jueves",
         "responde al de Anthropic diciendo que tengo la factura guardada",
     ]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "instruction": {
+                "type": "string",
+                "description": "What the email should say or convey, in natural language.",
+            },
+            "to": {
+                "type": "string",
+                "description": "Recipient email address. Required for new emails. For replies, leave empty — it's pulled from the original.",
+            },
+            "subject": {
+                "type": "string",
+                "description": "Subject line override. For replies, leave empty — auto-built as 'Re: <original>'.",
+            },
+            "reply_to_id": {
+                "type": "string",
+                "description": "Gmail message ID of the email being replied to. Set this when replying to a specific message from /inbox.",
+            },
+            "reply_to_hint": {
+                "type": "string",
+                "description": "Natural-language reference to the email being replied to (e.g. 'el de Anthropic', 'the third one', 'the one from Renfe'). Used when reply_to_id isn't known.",
+            },
+        },
+        "required": ["instruction"],
+    }
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm
@@ -156,6 +182,52 @@ class EmailComposerSkill(BaseSkill):
         if original:
             return await self._compose_reply(user_id, request, original, context)
         return await self._compose_new(user_id, request, context)
+
+    async def execute_with_args(self, args: dict, context: "Context") -> SkillResponse:
+        """Tool-use entry point — uses structured args (to, reply_to_id, etc.)
+        instead of parsing a natural-language message."""
+        from src.skills.email_state import find_message, get_last_opened, remember_opened
+
+        instruction = (args.get("instruction") or "").strip()
+        user_id = int(getattr(context, "user_id", 0) or 0)
+
+        # Resolve the original message we're replying to, if any.
+        gmail = self._gmail_optional()
+        original = None
+        msg_id = (args.get("reply_to_id") or "").strip()
+        hint = (args.get("reply_to_hint") or "").strip()
+        if not msg_id and hint:
+            target = find_message(user_id, hint)
+            if target:
+                msg_id = target.id
+        if not msg_id:
+            last_id, _ = get_last_opened(user_id)
+            if last_id and (hint or REPLY_TRIGGERS.search(instruction or "")):
+                msg_id = last_id
+        if msg_id and gmail:
+            try:
+                original = gmail.get_message_parsed(msg_id)
+                remember_opened(user_id, msg_id, original.get("body") or "")
+            except Exception as exc:
+                logger.warning("agentic email reply: get_message %s failed: %s", msg_id, exc)
+
+        if original:
+            sr = await self._compose_reply(user_id, instruction, original, context)
+            return sr
+
+        # New email path. Honor explicit `to` / `subject` from the model.
+        sr = await self._compose_new(user_id, instruction, context)
+        # Patch in user-supplied recipient/subject if the LLM left them blank.
+        if (args.get("to") or args.get("subject")) and sr.metadata.get("draft"):
+            from src.skills.email_state import stash_draft
+
+            draft = sr.metadata["draft"]
+            if args.get("to") and not draft.get("to"):
+                draft["to"] = args["to"]
+            if args.get("subject") and not draft.get("subject"):
+                draft["subject"] = args["subject"]
+            stash_draft(user_id, draft)
+        return sr
 
     # --- New email -----------------------------------------------------
     async def _compose_new(self, user_id: int, request: str, context: "Context") -> SkillResponse:

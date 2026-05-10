@@ -291,20 +291,171 @@ class Orchestrator:
     ) -> Response:
         if self.skill_registry is None:
             return await self._handle_chat(user_id, message, context)
-        skill = None
+
+        # Fast-path: classifier already named the skill. Single-shot dispatch,
+        # no agentic loop, no extra LLM call.
         if hint and hint.get("skill"):
             skill = self.skill_registry.get(hint["skill"])
-        if skill is None:
+            if skill is not None:
+                sr = await skill.execute(message=message, context=context)
+                return Response(
+                    text=sr.text,
+                    intent=Intent.TASK,
+                    inline_buttons=sr.inline_buttons,
+                    files=sr.files,
+                    metadata={"skill": skill.name, **sr.metadata},
+                )
+
+        # Slash-command short-circuit: keyword-pick the skill and run it
+        # without burning an LLM round-trip — covers /inbox, /cv, etc.
+        if message.lstrip().startswith("/"):
             skill = self.skill_registry.find_best_skill(message, context)
-        if skill is None:
+            if skill is not None:
+                sr = await skill.execute(message=message, context=context)
+                return Response(
+                    text=sr.text,
+                    intent=Intent.TASK,
+                    inline_buttons=sr.inline_buttons,
+                    files=sr.files,
+                    metadata={"skill": skill.name, **sr.metadata},
+                )
+
+        # Natural-language TASK: drive an agentic multi-tool loop with the
+        # mid-tier model. Lets the user compose ('mira inbox y respóndele al
+        # de Anthropic') in a single message.
+        return await self._run_agentic_loop(user_id, message, context)
+
+    AGENTIC_MAX_STEPS = 5
+    AGENTIC_MODEL_TIER = "fast"  # Sonnet 4.6 — strong reasoning without Opus cost
+
+    async def _run_agentic_loop(
+        self,
+        user_id: int,
+        message: str,
+        context: Context,
+    ) -> Response:
+        """Multi-tool loop: the driver model picks a skill, the orchestrator
+        runs it, the result is fed back, until the model emits a final text
+        turn or the step cap is hit. Keeps the user informed via the merged
+        skill outputs."""
+        registry = self.skill_registry
+        if registry is None:
             return await self._handle_chat(user_id, message, context)
-        sr = await skill.execute(message=message, context=context)
+
+        tools = registry.as_tools()
+        if not tools:
+            return await self._handle_chat(user_id, message, context)
+
+        capabilities = self._capabilities_block()
+        system = build_system_prompt(
+            user_name=context.profile.get("name"),
+            living_profile=context.living_profile,
+            communication_style=context.profile.get("communication_style"),
+            capabilities=capabilities,
+            extra=(
+                "\nYou are operating as the AGENTIC LOOP DRIVER. The user "
+                "asked you to do something — pick the right tool and call "
+                "it with structured args. After each tool result, decide if "
+                "you need ANOTHER tool (e.g. 'check inbox' then 'reply to "
+                "the third one') or if you're done. When done, stop calling "
+                "tools and write a short final reply to the user. "
+                f"Hard cap: {self.AGENTIC_MAX_STEPS} tool calls per turn."
+            ),
+        )
+
+        history: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": (
+                    f"Context (recent activity):\n{context.to_prompt_block()[:1500]}\n\n"
+                    f"User message:\n{message}"
+                ),
+            },
+        ]
+        skill_outputs: list[tuple[str, Any]] = []
+        final_text = ""
+        last_inline_buttons: list = []
+        last_files: list = []
+
+        for step in range(self.AGENTIC_MAX_STEPS):
+            try:
+                result = await self.llm.agentic_step(
+                    messages=history,
+                    tools=tools,
+                    system=system,
+                    model_tier=self.AGENTIC_MODEL_TIER,
+                    max_tokens=1500,
+                )
+            except Exception as exc:
+                logger.warning("agentic step %s failed: %s", step, exc)
+                final_text = f"⚠️ Agent loop failed: {exc}"
+                break
+
+            if result.text and not result.tool_calls:
+                final_text = result.text
+                break
+
+            if not result.tool_calls:
+                final_text = result.text or "(no response)"
+                break
+
+            # Round-trip the assistant turn so subsequent turns can match
+            # tool_use IDs to tool_result IDs.
+            history.append({"role": "assistant", "content": result.raw_content})
+
+            tool_results: list[dict[str, Any]] = []
+            for call in result.tool_calls:
+                skill = registry.get(call.name)
+                if skill is None:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": call.id,
+                        "content": f"(unknown skill: {call.name})",
+                        "is_error": True,
+                    })
+                    continue
+                try:
+                    sr = await skill.execute_with_args(call.input or {}, context)
+                except Exception as exc:
+                    logger.exception("skill %s failed in agentic loop", skill.name)
+                    sr = None
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": call.id,
+                        "content": f"Error: {exc}",
+                        "is_error": True,
+                    })
+                if sr is not None:
+                    skill_outputs.append((skill.name, sr))
+                    if sr.inline_buttons:
+                        last_inline_buttons = sr.inline_buttons
+                    if sr.files:
+                        last_files = sr.files
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": call.id,
+                        "content": (sr.text or "(no text)")[:6000],
+                    })
+
+            history.append({"role": "user", "content": tool_results})
+
+        # If the loop ended without a final text turn, build one from skill outputs.
+        if not final_text and skill_outputs:
+            chunks = [sr.text for _, sr in skill_outputs if sr.text]
+            final_text = "\n\n---\n\n".join(chunks) if chunks else "(no output)"
+        if not final_text:
+            final_text = "I tried but didn't produce anything useful — try rephrasing?"
+
         return Response(
-            text=sr.text,
+            text=final_text,
             intent=Intent.TASK,
-            inline_buttons=sr.inline_buttons,
-            files=sr.files,
-            metadata={"skill": skill.name, **sr.metadata},
+            inline_buttons=last_inline_buttons,
+            files=last_files,
+            metadata={
+                "agentic": True,
+                "steps": len(skill_outputs),
+                "skills_called": [name for name, _ in skill_outputs],
+            },
         )
 
     async def _handle_evolve(self, user_id: int, message: str, context: Context) -> Response:

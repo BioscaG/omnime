@@ -23,6 +23,22 @@ class BaseSkill(ABC):
     triggers: list[str] = []
     examples: list[str] = []
 
+    # JSON-schema describing this skill's parameters when it's invoked through
+    # the agentic tool-use loop. Subclasses override with rich, typed fields
+    # (e.g. ``email_composer`` exposes ``to`` / ``reply_to_id`` / ``instruction``).
+    # The default lets the loop pass through the raw user request as a free-form
+    # ``instruction`` string — works for skills whose argument is "do this".
+    input_schema: dict = {
+        "type": "object",
+        "properties": {
+            "instruction": {
+                "type": "string",
+                "description": "The user's natural-language instruction for this skill, verbatim.",
+            },
+        },
+        "required": ["instruction"],
+    }
+
     @property
     def enabled(self) -> bool:
         """Skills can override this to hide themselves when unavailable
@@ -32,6 +48,18 @@ class BaseSkill(ABC):
     @abstractmethod
     async def execute(self, message: str, context: "Context") -> SkillResponse:
         ...
+
+    async def execute_with_args(self, args: dict, context: "Context") -> SkillResponse:
+        """Entry point used by the agentic tool-use loop. Default: synthesise
+        a natural-language message from ``args`` (joining the values) and
+        call ``execute``. Skills with rich schemas should override this."""
+        if not args:
+            synthetic = ""
+        elif "instruction" in args and isinstance(args["instruction"], str):
+            synthetic = args["instruction"]
+        else:
+            synthetic = " ".join(str(v) for v in args.values() if v)
+        return await self.execute(synthetic, context)
 
     def can_handle(self, message: str, intent: str | None = None) -> float:
         """Score 0..1 for how likely this skill should handle the message."""

@@ -58,6 +58,17 @@ class EmailInboxSkill(BaseSkill):
         "mira mi email",
         "check my inbox and summarise what's important",
     ]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "max_results": {
+                "type": "integer",
+                "description": "Max number of unread emails to fetch (default 10).",
+                "default": 10,
+            },
+        },
+        "required": [],
+    }
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm

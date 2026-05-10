@@ -179,6 +179,16 @@ class BrowserAgentSkill(BaseSkill):
         "/browse trenes barcelona zaragoza mañana 9am",
         "abre LinkedIn y aplica al puesto de ML Engineer en Glovo",
     ]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "goal": {
+                "type": "string",
+                "description": "What the browser should accomplish — concrete and actionable. Include a starting URL when possible.",
+            },
+        },
+        "required": ["goal"],
+    }
 
     MAX_STEPS = 20
 

@@ -99,6 +99,10 @@ class ToolUseResult:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     stop_reason: Optional[str] = None
+    raw_content: list[Any] = field(default_factory=list)
+    """Raw provider content blocks (Anthropic). Needed to round-trip back as
+    an ``assistant`` turn during a multi-step agentic loop, because the API
+    requires the original ``tool_use`` blocks to match each ``tool_result``."""
 
 
 class LLMError(Exception):
@@ -540,8 +544,10 @@ class LLMClient:
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        raw_content: list[Any] = []
         for block in resp.content:
             btype = getattr(block, "type", None)
+            raw_content.append(block)
             if btype == "text":
                 text_parts.append(block.text)
             elif btype == "tool_use":
@@ -552,6 +558,79 @@ class LLMClient:
             text="\n".join(text_parts).strip(),
             tool_calls=tool_calls,
             stop_reason=getattr(resp, "stop_reason", None),
+            raw_content=raw_content,
+        )
+
+    async def agentic_step(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[ToolDef],
+        system: str | None = None,
+        model_tier: ModelTier = "fast",
+        max_tokens: int = 1500,
+        temperature: float = 0.0,
+    ) -> ToolUseResult:
+        """One step of an agentic tool-use loop. Unlike ``use_tools`` (which
+        takes a single string prompt), this accepts a full ``messages``
+        array so the orchestrator can round-trip ``tool_use`` and
+        ``tool_result`` blocks across turns.
+
+        Anthropic only — providers without native tool-use don't support
+        this loop shape and would degrade silently.
+        """
+        if self.provider != "anthropic":
+            raise LLMError("agentic_step requires the Anthropic provider")
+
+        from anthropic import AsyncAnthropic
+
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        model = self._model_for(model_tier)
+
+        tool_payload = []
+        for i, t in enumerate(tools):
+            entry: dict[str, Any] = {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            }
+            if i == len(tools) - 1:
+                entry["cache_control"] = {"type": "ephemeral"}
+            tool_payload.append(entry)
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "tools": tool_payload,
+            "messages": messages,
+        }
+        if self._supports_temperature(model):
+            kwargs["temperature"] = temperature
+        sys_blocks = self._system_blocks(system, cache=True)
+        if sys_blocks:
+            kwargs["system"] = sys_blocks
+
+        resp = await client.messages.create(**kwargs)
+        if hasattr(resp, "usage"):
+            self._record_usage(model, resp.usage)
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        raw_content: list[Any] = []
+        for block in resp.content:
+            btype = getattr(block, "type", None)
+            raw_content.append(block)
+            if btype == "text":
+                text_parts.append(block.text)
+            elif btype == "tool_use":
+                tool_calls.append(
+                    ToolCall(id=block.id, name=block.name, input=dict(block.input))
+                )
+        return ToolUseResult(
+            text="\n".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            stop_reason=getattr(resp, "stop_reason", None),
+            raw_content=raw_content,
         )
 
     async def _call_openai(

@@ -37,6 +37,16 @@ class WebResearcherSkill(BaseSkill):
         "investiga las últimas tendencias en small language models",
         "research the founders of Mistral AI",
     ]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": "What to research — a concrete topic, question, or entity.",
+            },
+        },
+        "required": ["topic"],
+    }
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm

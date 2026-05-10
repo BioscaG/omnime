@@ -4,6 +4,48 @@ OMNIME no usa versionado semántico todavía — cada release está marcada por 
 commit. Esta es la lista cronológica de los hitos importantes desde que el
 proyecto pasó de scaffolding a su estado actual.
 
+## 2026-05-10 — agentic multi-tool loop + tiered routing
+
+OMNIME now drives **multi-step compound requests** in a single message.
+"Mira mi inbox y respóndele al de Anthropic" no longer requires two turns.
+
+- **Agentic loop driver** in `Orchestrator._run_agentic_loop`: builds the
+  full skill list as Anthropic tool-use tools (with rich JSON schemas),
+  calls Sonnet 4.6 in a loop, executes tools, feeds results back, stops
+  when the model writes a final text turn or hits the 5-step cap.
+- **Tiered routing**: regex fast-path (free) → slash-command direct
+  dispatch (no LLM) → Haiku classifier ($) → Sonnet agentic loop ($$).
+  Average ~$0.30/day for typical use vs $1.50/day with all-Sonnet.
+- **Rich `input_schema` on every skill** (BaseSkill default + per-skill
+  overrides for email_*, web_fetch, browser_agent, web_researcher,
+  cv_generator). The driver model can now extract typed args
+  ('reply_to_id', 'url', 'job_description') instead of just choosing a
+  skill name and rerouting via keyword scoring.
+- **Per-skill `execute_with_args(args, context)`**: tool-use entry point.
+  Email composer overrides it to accept `reply_to_id` / `reply_to_hint`
+  directly.
+- **`LLMClient.agentic_step()`**: low-level multi-turn helper that takes
+  a full messages array (so tool_use ↔ tool_result blocks round-trip
+  cleanly across turns).
+
+## 2026-05-10 — full email assistant: read, search, reply-aware compose, scheduled send
+
+- Inbox triage with category icons (🔴 action / 🟡 personal / 📰 promo /
+  • other) and per-message inline buttons (Read / Reply / Archive).
+- New `EmailReadSkill` opens any specific email by reference ('lee el de
+  Anthropic', '#3') and summarises with TL;DR + key facts + suggested
+  action.
+- New `EmailSearchSkill` translates natural language to Gmail query
+  operators ('busca correos de Renfe del mes pasado').
+- `EmailComposerSkill` is now reply-aware: resolves references against
+  the cached inbox, fetches the original body via Gmail, threads correctly
+  (In-Reply-To / References / threadId), warns on no-reply addresses.
+- **Scheduled send**: confirming a draft schedules the send 10 minutes
+  out by default (cancellable from Telegram). Options: Send now / 10 min /
+  1 hour. `/scheduled_emails` lists pending sends with cancel buttons.
+- `GmailClient` gains `get_message_parsed()` (MIME walk + HTML strip),
+  threading-correct `send()`, `archive()`, `mark_read()`, `is_noreply()`.
+
 ## 2026-05-10 — capability awareness + auto-deploy
 
 - **Capability catalog injected into the system prompt**: the bot now knows

@@ -80,6 +80,16 @@ class CVGeneratorSkill(BaseSkill):
         "generate my CV tailored for this job: [paste job description]",
         "hazme un cv para una posición de data scientist en Glovo",
     ]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "job_description": {
+                "type": "string",
+                "description": "Optional job description to tailor the CV to. If empty, generates a full general CV.",
+            },
+        },
+        "required": [],
+    }
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm

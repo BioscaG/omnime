@@ -355,11 +355,12 @@ class Orchestrator:
         return await self._run_agentic_loop(user_id, message, context)
 
     AGENTIC_MAX_STEPS = 8
-    # Opus 4.7 as the driver. Far better instruction-following than Sonnet —
-    # the difference shows up exactly in cases where the agent could either
-    # call a tool or fake the result in text. Costs ~5× per loop but the
-    # difference for a personal assistant is night and day.
-    AGENTIC_MODEL_TIER = "powerful"
+    # Sonnet 4.6 — the sweet spot for an agentic personal assistant. Strong
+    # at tool use + reasoning without Opus's 5× price tag. The previous
+    # hallucination problems came from a fragmented per-turn loop, not from
+    # model capability — they're fixed by the new persistent
+    # ConversationStore where Sonnet sees its own prior tool_use blocks.
+    AGENTIC_MODEL_TIER = "fast"
 
     # Heuristic: tasks that compose 3+ verbs or span multiple domains often
     # need more than the default 5 tool calls. We bump the cap to the hard

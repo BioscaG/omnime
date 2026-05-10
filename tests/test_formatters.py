@@ -1,4 +1,4 @@
-"""MarkdownV2 helpers and chunking."""
+"""Telegram-flavoured HTML rendering + chunking helpers."""
 from __future__ import annotations
 
 import pytest
@@ -9,27 +9,49 @@ from src.utils.formatters import (
     fmt_date,
     join_nonempty,
     safe_markdown,
+    strip_markdown,
+    to_telegram_html,
     truncate,
 )
 
 
-def test_escape_markdown_escapes_specials():
+def test_to_telegram_html_renders_bold_italic_code():
+    out = to_telegram_html("Hello **world** and _friends_ with `code`.")
+    assert "<b>world</b>" in out
+    assert "<i>friends</i>" in out
+    assert "<code>code</code>" in out
+    assert "Hello" in out
+
+
+def test_to_telegram_html_handles_link():
+    out = to_telegram_html("see [docs](https://example.com)")
+    assert '<a href="https://example.com">docs</a>' in out
+
+
+def test_to_telegram_html_escapes_html_specials():
+    # Outside of markdown markers, < > & must be HTML-escaped.
+    out = to_telegram_html("a < b & c > d")
+    assert "&lt;" in out and "&gt;" in out and "&amp;" in out
+
+
+def test_to_telegram_html_renders_fenced_code():
+    out = to_telegram_html("```\nfoo()\n```")
+    assert "<pre>" in out and "foo()" in out
+
+
+def test_strip_markdown_removes_markers():
+    assert "**" not in strip_markdown("Hello **world** and _x_.")
+    assert "_" not in strip_markdown("Hello **world** and _x_.")
+
+
+def test_safe_markdown_alias_returns_html():
+    # Backwards-compat shim: safe_markdown now produces HTML output.
+    out = safe_markdown("**bold**")
+    assert "<b>bold</b>" in out
+
+
+def test_escape_markdown_legacy_still_escapes_specials():
     assert escape_markdown("hello_world.") == r"hello\_world\."
-    assert escape_markdown("a*b") == r"a\*b"
-    assert escape_markdown("[x](y)") == r"\[x\]\(y\)"
-
-
-def test_safe_markdown_preserves_bold_italic_code():
-    out = safe_markdown("Hello **world** and _friends_ with `code`.")
-    assert "*world*" in out
-    assert "_friends_" in out
-    assert "`code`" in out
-    assert r"\." in out
-
-
-def test_safe_markdown_handles_link():
-    out = safe_markdown("see [docs](https://example.com)")
-    assert "[docs](https://example.com)" in out
 
 
 def test_chunk_splits_long_text():

@@ -162,10 +162,13 @@ async def cmd_scheduled_emails(update: Update, context: ContextTypes.DEFAULT_TYP
             f"❌ Cancel → {rec.draft.get('to')}",
             callback_data=f"email:scheduled_cancel:{rec.id}",
         )])
+    from src.utils.formatters import to_telegram_html
+    from telegram.constants import ParseMode
+
     await update.effective_message.reply_text(
-        "\n".join(lines),
+        to_telegram_html("\n".join(lines)),
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown",
+        parse_mode=ParseMode.HTML,
     )
 
 

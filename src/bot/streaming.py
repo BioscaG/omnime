@@ -14,7 +14,7 @@ from typing import AsyncIterator, Optional
 from telegram import Message
 from telegram.constants import ParseMode
 
-from src.utils.formatters import safe_markdown
+from src.utils.formatters import to_telegram_html, strip_markdown
 
 
 logger = logging.getLogger(__name__)
@@ -73,11 +73,11 @@ class TelegramStreamer:
         if not text:
             return
         try:
-            await msg.edit_text(safe_markdown(text), parse_mode=ParseMode.MARKDOWN_V2)
+            await msg.edit_text(to_telegram_html(text), parse_mode=ParseMode.HTML)
         except Exception as exc:
-            logger.debug("MarkdownV2 edit failed (%s); retrying plain", exc)
+            logger.debug("HTML edit failed (%s); retrying stripped plain", exc)
             try:
-                await msg.edit_text(text)
+                await msg.edit_text(strip_markdown(text))
             except Exception as exc2:
                 # Frequent: "message is not modified" when the buffer didn't grow.
                 if "not modified" not in str(exc2).lower():

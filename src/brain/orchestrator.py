@@ -356,9 +356,25 @@ class Orchestrator:
                 "\nYou are operating as the AGENTIC LOOP DRIVER. The user "
                 "asked you to do something — pick the right tool and call "
                 "it with structured args. After each tool result, decide if "
-                "you need ANOTHER tool (e.g. 'check inbox' then 'reply to "
-                "the third one') or if you're done. When done, stop calling "
-                "tools and write a short final reply to the user. "
+                "you need another tool, or if you're ready to answer.\n\n"
+                "CRITICAL — final-answer rules:\n"
+                "1. NEVER end the turn with no text after a tool ran. After "
+                "every tool call you MUST write a final user-facing answer.\n"
+                "2. ANSWER THE USER'S QUESTION DIRECTLY using the tool "
+                "results. Don't just dump the raw tool output. Examples:\n"
+                "   - User: 'tengo algún mail importante?' → don't list all "
+                "10 unread. Look at the tool result, identify only the 🔴 "
+                "action items, and answer: 'Sí, hay X de [sender] sobre Y. "
+                "Los demás son newsletters.' or 'No, los 10 son promos.'\n"
+                "   - User: 'lee el de Anthropic' → after email_read, "
+                "summarise its content in 1-3 lines, don't repeat the body.\n"
+                "   - User: 'mira inbox y respóndele al de X' → after "
+                "calling both tools, confirm the draft is ready, don't "
+                "re-print everything.\n"
+                "3. Be the user's assistant, not a transcript machine. "
+                "Act on the data, interpret it, summarise, recommend.\n"
+                "4. Match the user's language (Spanish or English) in your "
+                "final answer.\n"
                 f"Hard cap: {self.AGENTIC_MAX_STEPS} tool calls per turn."
             ),
         )
@@ -439,7 +455,32 @@ class Orchestrator:
 
             history.append({"role": "user", "content": tool_results})
 
-        # If the loop ended without a final text turn, build one from skill outputs.
+        # If the loop ended without a final text turn, force one extra step
+        # without tool access so the model HAS to interpret the results and
+        # write a real user-facing answer (rather than dumping raw tool output).
+        if not final_text and skill_outputs:
+            try:
+                history.append({
+                    "role": "user",
+                    "content": (
+                        "Now write the final user-facing answer using the "
+                        "tool results above. Answer the user's actual "
+                        "question — interpret, summarise, recommend. Don't "
+                        "repeat raw tool output. Match the user's language."
+                    ),
+                })
+                forced = await self.llm.agentic_step(
+                    messages=history,
+                    tools=[],  # no tools — must produce text
+                    system=system,
+                    model_tier=self.AGENTIC_MODEL_TIER,
+                    max_tokens=900,
+                )
+                final_text = forced.text or ""
+            except Exception as exc:
+                logger.warning("forced final-answer step failed: %s", exc)
+
+        # Last-resort fallback (should be rare with the forced step above).
         if not final_text and skill_outputs:
             chunks = [sr.text for _, sr in skill_outputs if sr.text]
             final_text = "\n\n---\n\n".join(chunks) if chunks else "(no output)"

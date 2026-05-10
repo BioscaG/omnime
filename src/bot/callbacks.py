@@ -4,12 +4,30 @@ from __future__ import annotations
 import logging
 
 from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from src.bot.middleware import authorize
+from src.utils.formatters import to_telegram_html
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _edit_html(query, text: str, **kwargs) -> None:
+    """Replacement for ``query.edit_message_text`` that renders Markdown
+    (``**bold**``, ``*italic*``, links, code) as Telegram HTML, with
+    automatic fallback to plain text on parse errors."""
+    try:
+        await query.edit_message_text(
+            to_telegram_html(text), parse_mode=ParseMode.HTML, **kwargs
+        )
+    except Exception as exc:
+        logger.debug("HTML edit failed (%s); retrying plain", exc)
+        try:
+            await query.edit_message_text(text, **kwargs)
+        except Exception as exc2:
+            logger.warning("Plain edit also failed: %s", exc2)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -122,9 +140,10 @@ async def _handle_email_callback(query, context, data: str) -> None:
 
     if action == "forward":
         message_id = parts[2] if len(parts) > 2 else ""
-        await query.edit_message_text(
+        await _edit_html(
+            query,
             f"📤 Forward {message_id}: tell me _who_ to forward it to "
-            "(e.g. 'reenvíaselo a marc@x.com')."
+            "(e.g. 'reenvíaselo a marc@x.com').",
         )
         return
 
@@ -144,8 +163,9 @@ async def _email_send(query, context, user_id_db: int, delay_key: str) -> None:
 
     draft = peek_draft(user_id_db)
     if draft is None:
-        await query.edit_message_text(
-            "No pending draft — start with `/email <instruction>` first."
+        await _edit_html(
+            query,
+            "No pending draft — start with `/email <instruction>` first.",
         )
         return
     if not draft.get("to"):
@@ -156,8 +176,9 @@ async def _email_send(query, context, user_id_db: int, delay_key: str) -> None:
 
     client = GmailClient()
     if not client.enabled:
-        await query.edit_message_text(
-            "Gmail isn't connected. Set the `GMAIL_*` env vars and try again."
+        await _edit_html(
+            query,
+            "Gmail isn't connected. Set the `GMAIL_*` env vars and try again.",
         )
         return
 
@@ -173,8 +194,9 @@ async def _email_send(query, context, user_id_db: int, delay_key: str) -> None:
                 in_reply_to=draft.get("in_reply_to"),
                 references=draft.get("references"),
             )
-            await query.edit_message_text(
-                f"📨 Sent to **{draft['to']}** (id `{res.get('id', '?')}`)."
+            await _edit_html(
+                query,
+                f"📨 Sent to **{draft['to']}** (id `{res.get('id', '?')}`).",
             )
         except Exception as exc:
             logger.exception("immediate email send failed")
@@ -205,8 +227,8 @@ async def _email_send(query, context, user_id_db: int, delay_key: str) -> None:
             if err is None:
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=f"📨 Sent (delayed) to **{draft_copy['to']}**.",
-                    parse_mode="Markdown",
+                    text=to_telegram_html(f"📨 Sent (delayed) to **{draft_copy['to']}**."),
+                    parse_mode=ParseMode.HTML,
                 )
             else:
                 await bot.send_message(
@@ -225,7 +247,8 @@ async def _email_send(query, context, user_id_db: int, delay_key: str) -> None:
     )
 
     nice_when = {"10m": "10 minutes", "1h": "1 hour"}.get(delay_key, f"{int(delay)}s")
-    await query.edit_message_text(
+    await _edit_html(
+        query,
         f"⏰ Scheduled to send in **{nice_when}**. Tap below to cancel.",
         reply_markup=_inline([
             [{"text": "❌ Cancel scheduled send", "callback_data": f"email:scheduled_cancel:{rec.id}"}]
@@ -252,9 +275,9 @@ async def _email_open(query, context, user_id_db: int, message_id: str) -> None:
     ctx = await context_builder.build(user_id_db, f"/read {message_id}")
     sr = await skill.execute(message=f"/read {message_id}", context=ctx)
     await query.message.reply_text(
-        sr.text,
+        to_telegram_html(sr.text),
         reply_markup=_inline(sr.inline_buttons) if sr.inline_buttons else None,
-        parse_mode="Markdown",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -266,9 +289,10 @@ async def _email_start_reply(query, context, user_id_db: int, message_id: str) -
     from src.skills.email_state import remember_opened
 
     remember_opened(user_id_db, message_id, "")
-    await query.edit_message_text(
+    await _edit_html(
+        query,
         "↩️ Tell me what to say in the reply (e.g. _'thanks, I'll review and "
-        "get back this afternoon'_) and I'll draft it."
+        "get back this afternoon'_) and I'll draft it.",
     )
 
 

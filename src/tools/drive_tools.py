@@ -170,6 +170,157 @@ DRIVE_SHARE = Tool(
 )
 
 
+async def _drive_create_folder(args: dict, context: "Context") -> str:
+    client, err = _client_or_disabled()
+    if err:
+        return err
+    name = (args.get("name") or "").strip()
+    if not name:
+        return json.dumps({"error": "name is required"})
+    parent_id = (args.get("parent_id") or "").strip() or None
+    try:
+        result = client.create_folder(name=name, parent_id=parent_id)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({
+        "status": "created",
+        "id": result.get("id"),
+        "name": result.get("name"),
+        "webViewLink": result.get("webViewLink"),
+    }, ensure_ascii=False)
+
+
+DRIVE_CREATE_FOLDER = Tool(
+    name="drive_create_folder",
+    description=(
+        "Create a folder in Drive. Without parent_id, creates inside the "
+        "OMNIME workspace folder. To create a sub-sub-folder, first call "
+        "drive_list / drive_find to resolve the parent_id."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "parent_id": {"type": "string", "description": "Optional. Drive id of the parent folder. Defaults to OMNIME workspace folder."},
+        },
+        "required": ["name"],
+    },
+    run=_drive_create_folder,
+)
+
+
+async def _drive_move(args: dict, context: "Context") -> str:
+    client, err = _client_or_disabled()
+    if err:
+        return err
+    fid = (args.get("id") or "").strip()
+    if not fid:
+        return json.dumps({"error": "id is required"})
+    try:
+        result = client.move(
+            file_id=fid,
+            new_parent_id=(args.get("new_parent_id") or "").strip() or None,
+            new_name=(args.get("new_name") or "").strip() or None,
+        )
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({
+        "status": "moved",
+        "id": result.get("id"),
+        "name": result.get("name"),
+        "parents": result.get("parents"),
+        "webViewLink": result.get("webViewLink"),
+    }, ensure_ascii=False)
+
+
+DRIVE_MOVE = Tool(
+    name="drive_move",
+    description=(
+        "Move a Drive file or folder to a different parent and/or rename "
+        "it. Pass id (the thing to move), and either new_parent_id, "
+        "new_name, or both."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "description": "Drive id of the file/folder being moved."},
+            "new_parent_id": {"type": "string"},
+            "new_name": {"type": "string"},
+        },
+        "required": ["id"],
+    },
+    run=_drive_move,
+)
+
+
+async def _drive_find(args: dict, context: "Context") -> str:
+    client, err = _client_or_disabled()
+    if err:
+        return err
+    name = (args.get("name") or "").strip()
+    if not name:
+        return json.dumps({"error": "name is required"})
+    try:
+        items = client.find_by_name(
+            name=name,
+            parent_id=(args.get("parent_id") or "").strip() or None,
+            only_folders=bool(args.get("only_folders", False)),
+        )
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({"count": len(items), "items": items}, ensure_ascii=False)
+
+
+DRIVE_FIND = Tool(
+    name="drive_find",
+    description=(
+        "Find a Drive file/folder by exact name in a parent folder. Use "
+        "to resolve a folder name → id before calling drive_create_folder "
+        "with parent_id, or drive_move with new_parent_id."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "parent_id": {"type": "string", "description": "Optional. Defaults to OMNIME workspace."},
+            "only_folders": {"type": "boolean", "default": False},
+        },
+        "required": ["name"],
+    },
+    run=_drive_find,
+)
+
+
+async def _drive_delete(args: dict, context: "Context") -> str:
+    client, err = _client_or_disabled()
+    if err:
+        return err
+    fid = (args.get("id") or "").strip()
+    if not fid:
+        return json.dumps({"error": "id is required"})
+    try:
+        client.delete(fid)
+        return json.dumps({"status": "deleted", "id": fid})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+DRIVE_DELETE = Tool(
+    name="drive_delete",
+    description=(
+        "Delete a Drive file or folder by id. ONLY call when the user "
+        "explicitly asks ('borra', 'elimina'); never as a side effect. "
+        "Folders are deleted with all their contents."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+        "required": ["id"],
+    },
+    run=_drive_delete,
+)
+
+
 def build_drive_tools() -> list[Tool]:
     try:
         c = DriveClient()
@@ -177,4 +328,8 @@ def build_drive_tools() -> list[Tool]:
             return []
     except Exception:
         return []
-    return [DRIVE_UPLOAD, DRIVE_LIST, DRIVE_SHARE]
+    return [
+        DRIVE_UPLOAD, DRIVE_LIST, DRIVE_FIND,
+        DRIVE_CREATE_FOLDER, DRIVE_MOVE, DRIVE_DELETE,
+        DRIVE_SHARE,
+    ]

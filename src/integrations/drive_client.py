@@ -154,6 +154,66 @@ class DriveClient:
         service = self._build()
         service.files().delete(fileId=file_id).execute()
 
+    def create_folder(self, name: str, parent_id: str | None = None) -> dict[str, Any]:
+        """Create a folder. If parent_id is None, creates inside the OMNIME
+        workspace folder. Returns the new folder's metadata."""
+        service = self._build()
+        parent = parent_id or self._workspace_folder()
+        body = {
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent],
+        }
+        return service.files().create(
+            body=body, fields="id, name, webViewLink, parents",
+        ).execute()
+
+    def move(
+        self,
+        file_id: str,
+        new_parent_id: str | None = None,
+        new_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Move a file to a different parent and/or rename it."""
+        service = self._build()
+        update_body: dict[str, Any] = {}
+        if new_name:
+            update_body["name"] = new_name
+        kwargs: dict[str, Any] = {
+            "fileId": file_id,
+            "fields": "id, name, parents, webViewLink",
+        }
+        if new_parent_id:
+            current = service.files().get(fileId=file_id, fields="parents").execute()
+            old_parents = ",".join(current.get("parents", []))
+            kwargs["addParents"] = new_parent_id
+            kwargs["removeParents"] = old_parents
+        if update_body:
+            kwargs["body"] = update_body
+        return service.files().update(**kwargs).execute()
+
+    def find_by_name(
+        self,
+        name: str,
+        parent_id: str | None = None,
+        only_folders: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Look up files/folders by exact name in a given parent (defaults
+        to the OMNIME workspace folder)."""
+        service = self._build()
+        parent = parent_id or self._workspace_folder()
+        safe_name = name.replace("'", "\\'")
+        q_parts = [f"'{parent}' in parents", "trashed = false", f"name = '{safe_name}'"]
+        if only_folders:
+            q_parts.append("mimeType = 'application/vnd.google-apps.folder'")
+        resp = service.files().list(
+            q=" and ".join(q_parts),
+            spaces="drive",
+            fields="files(id, name, mimeType, webViewLink)",
+            pageSize=20,
+        ).execute()
+        return resp.get("files", [])
+
     def share_link(self, file_id: str) -> str:
         """Create a 'anyone with the link can view' permission and return
         the webViewLink. Use carefully — anyone with the URL can read."""

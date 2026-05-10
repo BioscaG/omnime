@@ -35,8 +35,12 @@ Entry:
 
 class JournalingSkill(BaseSkill):
     name = "journaling"
-    description = "Daily journaling prompt with sentiment tracking."
-    triggers = ["/journal", "journal entry", "journaling prompt", "write in journal"]
+    description = "Daily journaling prompt that captures sentiment and threads themes over time."
+    triggers = [
+        "/journal", "journal entry", "journaling prompt", "write in journal",
+        "diario de hoy", "quiero escribir en el diario",
+    ]
+    examples = ["empezamos el journal de hoy", "/journal hoy me siento agotado"]
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm

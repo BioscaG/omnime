@@ -38,8 +38,12 @@ SAFE_HEADERS = {
 
 class WebFetchSkill(BaseSkill):
     name = "web_fetch"
-    description = "Fetch a public URL, extract its content, summarise and index it."
+    description = "Read a public URL: extract its content, summarise it, and index relevant facts in memory."
     triggers = ["/fetch", "/url", "/scrape", "read this link", "lee esta web", "abre la url"]
+    examples = [
+        "aquí tienes mi web https://guidobiosca.com saca info y guarda lo relevante",
+        "read this article and tell me the gist: https://example.com/post",
+    ]
 
     MAX_BYTES = 4 * 1024 * 1024  # 4 MB cap on download
     TIMEOUT = 20.0

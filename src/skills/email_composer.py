@@ -39,10 +39,15 @@ Rules:
 
 class EmailComposerSkill(BaseSkill):
     name = "email_composer"
-    description = "Draft an email for the user to review."
+    description = "Draft an email (subject + body) for the user to review before sending."
     triggers = [
         "/email", "draft an email", "draft email", "write an email",
         "compose email", "respond to", "reply to", "answer this email",
+        "escribe un correo", "redacta email", "respóndele a", "contéstale a",
+    ]
+    examples = [
+        "redacta un email a Marc cancelando la reunión del jueves",
+        "draft a reply to my landlord about the deposit",
     ]
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:

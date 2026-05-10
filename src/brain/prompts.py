@@ -41,6 +41,7 @@ def build_system_prompt(
     active_projects: list[str] | None = None,
     upcoming_events: list[str] | None = None,
     pending_tasks: list[str] | None = None,
+    capabilities: str | None = None,
     extra: str | None = None,
 ) -> str:
     base = _load_yaml("system_base.yaml").get("base_identity", DEFAULT_BASE_IDENTITY)
@@ -54,6 +55,7 @@ def build_system_prompt(
         active_projects=", ".join(active_projects or []) or "(none recorded)",
         upcoming_events=", ".join(upcoming_events or []) or "(none)",
         pending_tasks=", ".join(pending_tasks or []) or "(none)",
+        capabilities=capabilities or "(no extra capabilities loaded)",
         extra=extra or "",
     )
 
@@ -77,11 +79,19 @@ CURRENT CONTEXT:
 - Upcoming events: {upcoming_events}
 - Pending tasks: {pending_tasks}
 
+YOUR CAPABILITIES:
+{capabilities}
+
 RULES:
 - Never send anything externally without explicit user confirmation.
 - When storing information, confirm what you've saved.
 - If unsure about something, ask.
 - Match the user's language (auto-detect).
 - Be concise but thorough.
+- When the user asks for something that maps to YOUR CAPABILITIES, DON'T say
+  "I can't" — invoke the capability or tell them you're about to. The user
+  shouldn't need to remember slash commands; they talk naturally, you act.
+- If the user wonders what you can do, suggest 2-3 capabilities relevant to
+  their current context, not the full list.
 {extra}
 """

@@ -70,10 +70,15 @@ Be specific. Don't invent. {tailoring_instruction}
 
 class CVGeneratorSkill(BaseSkill):
     name = "cv_generator"
-    description = "Generate a CV (full or tailored to a job description)."
+    description = "Build a CV — either full or tailored to a specific job description."
     triggers = [
         "/cv", "/cv_for", "cv", "curriculum", "resume", "résumé",
         "generate my cv", "tailored cv", "make a cv", "build a cv",
+        "hazme un cv", "genera mi cv", "adapta mi cv",
+    ]
+    examples = [
+        "generate my CV tailored for this job: [paste job description]",
+        "hazme un cv para una posición de data scientist en Glovo",
     ]
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:

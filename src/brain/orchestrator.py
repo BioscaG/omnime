@@ -29,8 +29,14 @@ class Intent(str, Enum):
 
 
 # --- Routing tools ----------------------------------------------------------
+#
+# The TASK tool's description and skill enum are populated dynamically from
+# the live skill registry (see ``Orchestrator._build_routing_tools``). This
+# means the routing LLM sees the actual list of available capabilities — so
+# natural-language requests like "mira mi email" or "tradúceme esto" get
+# matched to the right skill without needing a slash command.
 
-ROUTING_TOOLS: list[ToolDef] = [
+_STATIC_ROUTING_TOOLS: list[ToolDef] = [
     ToolDef(
         name="STORE",
         description=(
@@ -48,23 +54,6 @@ ROUTING_TOOLS: list[ToolDef] = [
         input_schema={"type": "object", "properties": {}, "required": []},
     ),
     ToolDef(
-        name="TASK",
-        description=(
-            "Run a known skill: CV generation, email drafting, document creation, "
-            "web research, daily briefing, code generation, weekly review."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "skill": {
-                    "type": "string",
-                    "description": "Hint for the skill name when obvious (e.g. 'cv_generator').",
-                }
-            },
-            "required": [],
-        },
-    ),
-    ToolDef(
         name="EVOLVE",
         description=(
             "User asks OMNIME to gain a brand new capability ('add the ability to…', "
@@ -77,6 +66,37 @@ ROUTING_TOOLS: list[ToolDef] = [
         description="Casual conversation, opinions or anything that doesn't fit the others.",
         input_schema={"type": "object", "properties": {}, "required": []},
     ),
+]
+
+
+def _build_task_tool(skills_catalog: str, skill_names: list[str]) -> ToolDef:
+    return ToolDef(
+        name="TASK",
+        description=(
+            "Run one of the user's available capabilities. Pick TASK whenever "
+            "the user is requesting an ACTION that matches one of the skills "
+            "below (even if they phrase it casually, in any language, without "
+            "a slash command). Available skills:\n"
+            + (skills_catalog or "(none registered yet)")
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "skill": {
+                    "type": "string",
+                    "description": "Exact name of the skill to run.",
+                    **({"enum": skill_names} if skill_names else {}),
+                }
+            },
+            "required": ["skill"] if skill_names else [],
+        },
+    )
+
+
+# Backwards-compat: tests import ROUTING_TOOLS by name. Keep a stable list
+# even if the live one is rebuilt per-request.
+ROUTING_TOOLS: list[ToolDef] = _STATIC_ROUTING_TOOLS + [
+    _build_task_tool("(populated at runtime from skill registry)", []),
 ]
 
 
@@ -127,6 +147,16 @@ class Orchestrator:
         self.skill_registry = skill_registry
         self.evolution_engine = evolution_engine
 
+    def _live_routing_tools(self) -> list[ToolDef]:
+        """Build the routing tools with the TASK tool listing the actual
+        skills currently registered. Falls back to the static placeholder if
+        no registry was wired in (e.g. unit tests for routing only)."""
+        if self.skill_registry is None:
+            return ROUTING_TOOLS
+        catalog = self.skill_registry.as_catalog()
+        names = self.skill_registry.enabled_names()
+        return _STATIC_ROUTING_TOOLS + [_build_task_tool(catalog, names)]
+
     async def classify_intent(
         self,
         message: str,
@@ -146,11 +176,14 @@ class Orchestrator:
         try:
             result = await self.llm.use_tools(
                 prompt=(
-                    "Pick the right tool to handle this user message.\n\n"
+                    "Pick the right tool to handle this user message. If the "
+                    "user is asking you to DO something that matches one of "
+                    "the TASK skills, choose TASK and set the `skill` field "
+                    "to the matching skill name.\n\n"
                     f"Recent context:\n{ctx_block[:1500]}\n\n"
                     f'User message: "{message}"'
                 ),
-                tools=ROUTING_TOOLS,
+                tools=self._live_routing_tools(),
                 system="You route messages by selecting exactly one tool.",
                 model_tier="tiny",
                 max_tokens=150,
@@ -217,6 +250,15 @@ class Orchestrator:
         text = "Saved:\n" + bullets + "\n\nLet me know if anything's off."
         return Response(text=text, intent=Intent.STORE, metadata={"summary": result.stored_summary})
 
+    def _capabilities_block(self) -> str | None:
+        if self.skill_registry is None:
+            return None
+        try:
+            return self.skill_registry.as_catalog() or None
+        except Exception as exc:
+            logger.debug("capabilities catalog failed: %s", exc)
+            return None
+
     async def _handle_query(
         self,
         user_id: int,
@@ -228,6 +270,7 @@ class Orchestrator:
             user_name=context.profile.get("name"),
             living_profile=context.living_profile,
             communication_style=context.profile.get("communication_style"),
+            capabilities=self._capabilities_block(),
         )
         body = (
             f"User asked: {message}\n\n"
@@ -284,6 +327,7 @@ class Orchestrator:
             user_name=context.profile.get("name"),
             living_profile=context.living_profile,
             communication_style=context.profile.get("communication_style"),
+            capabilities=self._capabilities_block(),
         )
         body = f"{context.to_prompt_block()}\n\nUser: {message}\n\nReply naturally."
         text = await self._stream_or_complete(
@@ -334,6 +378,7 @@ class Orchestrator:
             user_name=context.profile.get("name"),
             living_profile=context.living_profile,
             communication_style=context.profile.get("communication_style"),
+            capabilities=self._capabilities_block(),
             extra="\nThis is a /private message: nothing said here will be persisted to long-term memory.",
         )
         try:

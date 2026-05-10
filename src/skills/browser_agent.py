@@ -172,6 +172,12 @@ class BrowserAgentSkill(BaseSkill):
     triggers = [
         "/browse", "/browser", "browse the web for me",
         "fill this form", "navega por", "rellena el formulario",
+        "compra el billete", "buy the ticket", "book me",
+        "abre la página y", "log in to", "entra en mi cuenta de",
+    ]
+    examples = [
+        "/browse trenes barcelona zaragoza mañana 9am",
+        "abre LinkedIn y aplica al puesto de ML Engineer en Glovo",
     ]
 
     MAX_STEPS = 20

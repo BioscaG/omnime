@@ -46,8 +46,12 @@ Be brief, scannable, no fluff.
 
 class DailyBriefingSkill(BaseSkill):
     name = "daily_briefing"
-    description = "Generate the user's daily briefing."
-    triggers = ["/briefing", "daily briefing", "morning summary", "brief me"]
+    description = "Personalised morning briefing: today's events, pending tasks, top priorities."
+    triggers = [
+        "/briefing", "daily briefing", "morning summary", "brief me",
+        "dame el resumen del día", "qué tengo hoy", "what's on today",
+    ]
+    examples = ["dame el briefing de hoy", "what does my day look like?"]
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:
         self.llm = llm

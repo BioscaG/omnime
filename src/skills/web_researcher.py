@@ -27,10 +27,15 @@ Results:
 
 class WebResearcherSkill(BaseSkill):
     name = "web_researcher"
-    description = "Research a topic on the web and return a summarised answer with sources."
+    description = "Research a topic on the web and return a sourced summary."
     triggers = [
         "/research", "research", "look up", "search the web",
         "find information about", "what is", "who is",
+        "investiga", "busca info sobre", "averigua",
+    ]
+    examples = [
+        "investiga las últimas tendencias en small language models",
+        "research the founders of Mistral AI",
     ]
 
     def __init__(self, llm: "LLMClient", memory: "MemoryManager") -> None:

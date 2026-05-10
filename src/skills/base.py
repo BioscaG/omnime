@@ -21,6 +21,13 @@ class BaseSkill(ABC):
     name: str = "base"
     description: str = ""
     triggers: list[str] = []
+    examples: list[str] = []
+
+    @property
+    def enabled(self) -> bool:
+        """Skills can override this to hide themselves when unavailable
+        (e.g. Gmail skill when OAuth isn't configured)."""
+        return True
 
     @abstractmethod
     async def execute(self, message: str, context: "Context") -> SkillResponse:
@@ -34,3 +41,12 @@ class BaseSkill(ABC):
             if t.lower() in msg:
                 score = max(score, 0.7)
         return score
+
+    def catalog_line(self) -> str:
+        """One-line entry for the capability catalog injected into the system
+        prompt and the routing tool description."""
+        line = f"- `{self.name}` — {self.description}"
+        if self.examples:
+            sample = " / ".join(f'"{e}"' for e in self.examples[:2])
+            line += f"  (e.g. {sample})"
+        return line

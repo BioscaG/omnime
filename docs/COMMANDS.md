@@ -67,6 +67,18 @@ know what you want.
 | `/graph [filter]` | Render a Mermaid knowledge graph of your projects + contacts + skills + tech |
 | `/evolve <new capability>` | Generate a new skill: AST allowlist → sandbox smoke test → LLM code review → PR on GitHub |
 
+## 📬 Email & web
+
+| Command | What it does |
+|---|---|
+| `/inbox` (or `mira mi email`) | List + summarise unread Gmail messages. Requires `GMAIL_*` env vars |
+| `/fetch <url>` | Read a public URL, summarise + index relevant facts into memory |
+| `/browse <goal>` | Vision-driven Chromium browser drives a real session toward the goal |
+
+> **Tip:** since the routing LLM now sees the live capability catalog, you
+> *don't* need to remember any of these. "Mira mis correos sin leer" or
+> "abre LinkedIn y aplica al puesto X" will route to the right skill.
+
 ## 🎙 Non-text inputs
 
 | Input | What happens |

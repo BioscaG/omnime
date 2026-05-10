@@ -37,6 +37,19 @@ class SkillRegistry:
     def list_skills(self) -> list[BaseSkill]:
         return list(self._skills.values())
 
+    def list_enabled(self) -> list[BaseSkill]:
+        return [s for s in self._skills.values() if getattr(s, "enabled", True)]
+
+    def as_catalog(self) -> str:
+        """Render all enabled skills as a markdown bullet list — used both in
+        the system prompt (so the bot knows what it can do) and in the routing
+        tool description (so Haiku can pick the right skill name)."""
+        lines = [s.catalog_line() for s in self.list_enabled()]
+        return "\n".join(lines)
+
+    def enabled_names(self) -> list[str]:
+        return [s.name for s in self.list_enabled()]
+
     def get(self, name: str) -> Optional[BaseSkill]:
         return self._skills.get(name)
 
@@ -108,6 +121,7 @@ def _register_default_skills(registry: SkillRegistry) -> None:
     from src.skills.agentic import AgenticSkill
     from src.skills.web_fetch import WebFetchSkill
     from src.skills.browser_agent import BrowserAgentSkill
+    from src.skills.email_inbox import EmailInboxSkill
 
     for cls in (
         CVGeneratorSkill,
@@ -130,6 +144,7 @@ def _register_default_skills(registry: SkillRegistry) -> None:
         AgenticSkill,
         WebFetchSkill,
         BrowserAgentSkill,
+        EmailInboxSkill,
     ):
         try:
             registry.register(cls(registry.llm, registry.memory))

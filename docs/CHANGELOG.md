@@ -4,6 +4,21 @@ OMNIME no usa versionado semántico todavía — cada release está marcada por 
 commit. Esta es la lista cronológica de los hitos importantes desde que el
 proyecto pasó de scaffolding a su estado actual.
 
+## 2026-05-10 — capability awareness + auto-deploy
+
+- **Capability catalog injected into the system prompt**: the bot now knows
+  exactly which skills it has and what they do, so natural-language requests
+  ("mira mi email", "abre la web y saca info") route correctly without
+  forcing the user to remember slash commands.
+- **TASK tool now lists actual skills**: the routing classifier (Haiku) sees
+  the full skill list with descriptions + examples and picks one by name —
+  replaces the previous `find_best_skill` keyword scoring.
+- **`EmailInboxSkill` added**: wraps `GmailClient` to list + summarise unread
+  inbox. Hides itself from the catalog when Gmail OAuth isn't configured.
+- **Auto-deploy via GitHub Actions** (`.github/workflows/deploy.yml`): every
+  push to `main` SSHes to the VPS and runs `git reset --hard origin/main &&
+  docker compose up -d --build`. Credentials live in repo secrets.
+
 ## 2026-05-10 — durabilidad + observabilidad
 
 - **Daily off-site backups** (`scripts/backup.py`): tar.gz con `pg_dump` + JSON

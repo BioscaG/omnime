@@ -31,6 +31,151 @@ _whisper_lock = asyncio.Lock()
 _UPLOAD_SESSIONS: dict[int, tuple[Path, float]] = {}
 UPLOAD_SESSION_GAP = 5 * 60  # 5 minutes
 
+# Burst buffer for consolidated receipts. When uploads arrive in quick
+# succession, we suppress per-file acks and send a single consolidated
+# message after BATCH_DEBOUNCE_SECONDS of silence.
+_BATCH_BUFFER: dict[int, dict] = {}
+BATCH_DEBOUNCE_SECONDS = 6.0
+
+
+def _enqueue_batch_entry(user_id: int, chat, entry: dict) -> None:
+    """Append one upload to the user's pending burst. Schedules (or
+    reschedules) the debounce task that flushes a consolidated receipt
+    when the user stops uploading for BATCH_DEBOUNCE_SECONDS."""
+    buf = _BATCH_BUFFER.setdefault(user_id, {"chat": chat, "entries": [], "task": None})
+    buf["chat"] = chat
+    buf["entries"].append(entry)
+    existing = buf.get("task")
+    if existing and not existing.done():
+        existing.cancel()
+    buf["task"] = asyncio.create_task(_flush_batch_after_delay(user_id))
+
+
+async def _flush_batch_after_delay(user_id: int) -> None:
+    try:
+        await asyncio.sleep(BATCH_DEBOUNCE_SECONDS)
+    except asyncio.CancelledError:
+        return
+    buf = _BATCH_BUFFER.pop(user_id, None)
+    if buf is None:
+        return
+    entries = buf["entries"]
+    chat = buf["chat"]
+    if not entries:
+        return
+
+    # Single-file: run DocumentAnalyzer + entity extractor + rich receipt.
+    # Skip analyzer for code/markup; those benefit only from chunk-indexing.
+    if len(entries) == 1:
+        e = entries[0]
+        rel = e.get("rel_name") or ""
+        suffix = Path(rel).suffix.lower()
+        is_source = suffix in TEXT_SUFFIXES and suffix not in {".txt", ".md", ".csv"}
+        extracted = e.get("extracted") or ""
+        chunk_count = e.get("chunk_count", 0)
+        if not extracted:
+            await safe_send(chat.send_message, f"📄 Stored **{e.get('filename')}** (no text extracted).")
+            return
+        if is_source:
+            await safe_send(
+                chat.send_message,
+                f"📎 **{e.get('filename')}** stored ({chunk_count} chunk(s) indexed). "
+                "Ask me anything about it.",
+            )
+            return
+        # Heavy mode: standalone PDF / DOCX / etc. → run analysis.
+        try:
+            from src.skills.document_analyzer import DocumentAnalyzer
+            analyzer = DocumentAnalyzer(e.get("llm"))
+            analysis = await analyzer.analyze(extracted)
+        except Exception as exc:
+            logger.warning("DocumentAnalyzer failed: %s", exc)
+            analysis = None
+        # Update FileRecord with the analysis info.
+        try:
+            from sqlalchemy import select
+            from src.memory import models as _m
+            from src.memory.db import session_scope as _scope
+            with _scope() as s:
+                row = s.execute(
+                    select(_m.FileRecord).where(_m.FileRecord.id == e["file_id"])
+                ).scalar_one_or_none()
+                if row is not None and analysis is not None:
+                    row.summary = analysis.summary or row.summary
+                    row.tags = analysis.tags or row.tags
+                    md = dict(row.extra_metadata or {})
+                    md.update({
+                        "category": analysis.category,
+                        "title": analysis.title or e.get("filename"),
+                        "language": analysis.language,
+                        "key_entities": analysis.key_entities,
+                    })
+                    row.extra_metadata = md
+        except Exception as exc:
+            logger.debug("FileRecord enrich failed: %s", exc)
+
+        # Run entity extractor (background) on the document text.
+        extraction_summary = ""
+        if len(extracted) > 200:
+            try:
+                memory = e.get("memory")
+                result = await memory.process_and_store(
+                    user_id=e["user_id_db"],
+                    message=extracted[:8000],
+                    context_hint=(
+                        f"This text comes from an uploaded document "
+                        f"'{e.get('filename')}'."
+                    ),
+                )
+                extraction_summary = result.stored_summary
+            except Exception as exc:
+                logger.warning("entity extraction failed: %s", exc)
+
+        # Rich receipt.
+        title = (analysis.title if analysis else None) or e.get("filename")
+        category = (analysis.category if analysis else None) or "document"
+        bullets = [
+            f"📄 **{title}**",
+            f"Type: `{category}` · {chunk_count} chunk(s) indexed · saved to files",
+        ]
+        if analysis and analysis.tags:
+            bullets.append(f"Tags: {', '.join(analysis.tags)}")
+        if analysis and analysis.summary:
+            bullets.append(f"\n{analysis.summary}")
+        if analysis and analysis.key_entities:
+            bullets.append(f"\n_Mentioned: {', '.join(analysis.key_entities[:6])}_")
+        if extraction_summary and extraction_summary != "nothing new":
+            bullets.append(f"\n💾 Saved to memory: {extraction_summary}")
+        bullets.append("\n_Ask me anything about it later._")
+        try:
+            await safe_send(chat.send_message, "\n".join(bullets))
+        except Exception as exc:
+            logger.warning("batch flush single-file send failed: %s", exc)
+        return
+
+    # Multi-file: consolidated receipt.
+    sessions = sorted({e.get("session") for e in entries if e.get("session")})
+    session_label = sessions[0] if len(sessions) == 1 else "multiple"
+    file_lines = [f"  · `{e.get('filename')}`" for e in entries[:20]]
+    if len(entries) > 20:
+        file_lines.append(f"  · _(+{len(entries) - 20} more)_")
+    ids = [e["file_id"] for e in entries if e.get("file_id") is not None]
+    summary = (
+        f"📦 **{len(entries)} files added** to `{session_label}/`\n\n"
+        + "\n".join(file_lines)
+        + "\n\n_All chunked + indexed for search. Tell me what you want "
+        "(e.g. 'analiza este proyecto', 'busca incoherencias entre los capítulos', "
+        "'extrae las citas') and I'll run Claude Code on the whole batch._"
+    )
+    try:
+        await safe_send(chat.send_message, summary)
+    except Exception as exc:
+        logger.warning("batch flush consolidated send failed: %s", exc)
+    logger.info(
+        "batch_flush: user=%d files=%d session=%s",
+        user_id, len(entries), session_label,
+    )
+
 
 def _slugify_for_dir(text: str) -> str:
     import re as _re
@@ -358,109 +503,72 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     extracted = await asyncio.to_thread(_extract_text, path)
 
-    if not extracted:
-        await safe_send(chat.send_message, f"📄 Stored **{doc.file_name}** (no text extracted).")
-        return
+    # Cheap per-file work: store basic FileRecord + chunk + index. The
+    # heavy work (DocumentAnalyzer, entity extractor, rich receipt) is
+    # deferred to the batch flush so a burst of uploads doesn't fire N
+    # parallel Sonnet calls — and so we can decide at flush time whether
+    # to treat the batch as ONE project (2+ files) or analyse the single
+    # standalone file.
+    from src.skills.document_analyzer import chunk_text
 
-    # Light-mode for project source files: code / markup / bibliography.
-    # Per-file DocumentAnalyzer + entity extractor would create one
-    # 'project' / set of 'skills' per chapter, generating spurious
-    # duplicates. We just chunk + index. Deep analysis is triggered
-    # explicitly by the user via claude_code_analyze on the whole batch.
-    src_suffix = path.suffix.lower()
-    light_mode = src_suffix in TEXT_SUFFIXES and src_suffix not in {".txt", ".md", ".csv"}
-
-    from src.skills.document_analyzer import DocumentAnalyzer, chunk_text
-
-    analysis = None
-    if not light_mode:
-        analyzer = DocumentAnalyzer(llm)
-        analysis = await analyzer.analyze(extracted)
-
-    # 2. Persist the file row with rich metadata.
     from src.memory.db import session_scope
     from src.memory.structured import StructuredStore
 
-    category = (analysis.category if analysis else None) or "source"
-    title = (analysis.title if analysis else None) or doc.file_name
-
     with session_scope() as s:
-        StructuredStore(s).add_file(
+        stored = StructuredStore(s).add_file(
             user_id=user_id_db,
             filename=rel_name,
             file_type=doc.mime_type,
             telegram_file_id=doc.file_id,
-            extracted_text=extracted[:50000],
-            summary=(analysis.summary if analysis else None),
-            tags=(analysis.tags if analysis else None),
+            extracted_text=(extracted or "")[:50000] if extracted else None,
+            summary=None,
+            tags=None,
             extra_metadata={
-                "category": category,
-                "title": title,
-                "language": (analysis.language if analysis else None),
-                "key_entities": (analysis.key_entities if analysis else None),
+                "category": "pending",
+                "title": doc.file_name,
                 "session": rel_name.split("/")[0] if "/" in rel_name else None,
             },
         )
+        stored_id = stored.id
 
-    # Chunk + index for files_search regardless of mode.
-    chunks = chunk_text(extracted, target_chars=1800, overlap=200)
-    for i, chunk_text_value in enumerate(chunks):
-        try:
-            memory.semantic.add(
-                collection="documents",
-                text=chunk_text_value,
-                metadata={
-                    "user_id": user_id_db,
-                    "filename": rel_name,
-                    "category": category,
-                    "chunk": i,
-                    "of": len(chunks),
-                },
-            )
-        except Exception as exc:
-            logger.warning("Document chunk %d indexing failed: %s", i, exc)
+    chunk_count = 0
+    if extracted:
+        chunks = chunk_text(extracted, target_chars=1800, overlap=200)
+        chunk_count = len(chunks)
+        for i, chunk_text_value in enumerate(chunks):
+            try:
+                memory.semantic.add(
+                    collection="documents",
+                    text=chunk_text_value,
+                    metadata={
+                        "user_id": user_id_db,
+                        "filename": rel_name,
+                        "chunk": i,
+                        "of": chunk_count,
+                    },
+                )
+            except Exception as exc:
+                logger.warning("Document chunk %d indexing failed: %s", i, exc)
 
-    # Entity extractor only for stand-alone documents, not project source.
-    extraction_summary = ""
-    if not light_mode and extracted and len(extracted) > 200:
-        try:
-            result = await memory.process_and_store(
-                user_id=user_id_db,
-                message=extracted[:8000],
-                context_hint=(
-                    f"This text comes from an uploaded document classified "
-                    f"as '{category}', titled '{title}'."
-                ),
-            )
-            extraction_summary = result.stored_summary
-        except Exception as exc:
-            logger.warning("Document entity extraction failed: %s", exc)
-
-    # Receipt — terse for light-mode (just acknowledge), rich for full-mode.
-    if light_mode:
-        session_label = rel_name.split("/")[0] if "/" in rel_name else "(root)"
-        bullets = [
-            f"📎 **{doc.file_name}** added to `{session_label}/` "
-            f"({len(chunks)} chunk(s) indexed)."
-        ]
-        bullets.append(
-            "_Tip: ask me to analyse the whole batch ('analiza mi TFG') "
-            "and I'll send the project to Claude Code._"
-        )
-    else:
-        bullets = [f"📄 **{title}**"]
-        bullets.append(f"Type: `{category}` · {len(chunks)} chunk(s) indexed · saved to files")
-        if analysis and analysis.tags:
-            bullets.append(f"Tags: {', '.join(analysis.tags)}")
-        if analysis and analysis.summary:
-            bullets.append(f"\n{analysis.summary}")
-        if analysis and analysis.key_entities:
-            bullets.append(f"\n_Mentioned: {', '.join(analysis.key_entities[:6])}_")
-        if extraction_summary and extraction_summary != "nothing new":
-            bullets.append(f"\n💾 Saved to memory: {extraction_summary}")
-        bullets.append("\n_Ask me anything about it later._")
-
-    await safe_send(chat.send_message, "\n".join(bullets))
+    # Buffer for the consolidated/single-file flush. The flush decides:
+    #   - 1 entry → run DocumentAnalyzer + entity extractor + rich receipt
+    #   - 2+ entries → consolidated batch receipt (defer analysis to user request)
+    _enqueue_batch_entry(
+        user_id_db,
+        chat,
+        {
+            "file_id": stored_id,
+            "filename": doc.file_name,
+            "rel_name": rel_name,
+            "session": rel_name.split("/")[0] if "/" in rel_name else None,
+            "extracted": extracted or "",
+            "mime_type": doc.mime_type,
+            "chunk_count": chunk_count,
+            "llm": llm,
+            "memory": memory,
+            "user_id_db": user_id_db,
+        },
+    )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

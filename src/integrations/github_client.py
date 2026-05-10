@@ -72,3 +72,35 @@ class GitHubClient:
         repo = self._build()
         issue = repo.create_issue(title=title, body=body, labels=labels or [])
         return {"number": issue.number, "url": issue.html_url}
+
+    def list_issues(self, state: str = "open", max_results: int = 20) -> list[dict[str, Any]]:
+        repo = self._build()
+        out = []
+        for issue in repo.get_issues(state=state)[:max_results]:
+            if issue.pull_request is not None:
+                continue  # skip PRs
+            out.append({
+                "number": issue.number,
+                "title": issue.title,
+                "url": issue.html_url,
+                "state": issue.state,
+                "labels": [l.name for l in issue.labels],
+                "updated_at": issue.updated_at.isoformat() if issue.updated_at else None,
+            })
+        return out
+
+    def list_pulls(self, state: str = "open", max_results: int = 20) -> list[dict[str, Any]]:
+        repo = self._build()
+        out = []
+        for pr in repo.get_pulls(state=state)[:max_results]:
+            out.append({
+                "number": pr.number,
+                "title": pr.title,
+                "url": pr.html_url,
+                "state": pr.state,
+                "draft": pr.draft,
+                "head": pr.head.ref,
+                "base": pr.base.ref,
+                "updated_at": pr.updated_at.isoformat() if pr.updated_at else None,
+            })
+        return out

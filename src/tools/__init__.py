@@ -71,12 +71,18 @@ def collect_default_tools(skill_registry=None) -> list[Tool]:
     from src.tools.email_tools import build_email_tools
     from src.tools.memory_tools import build_memory_tools
     from src.tools.web_tools import build_web_tools
+    from src.tools.calendar_tools import build_calendar_tools
+    from src.tools.notion_tools import build_notion_tools
+    from src.tools.github_tools import build_github_tools
     from src.tools.skill_adapter import wrap_skill_as_tool
 
     tools: list[Tool] = []
     tools.extend(build_email_tools())
+    tools.extend(build_calendar_tools())
     tools.extend(build_memory_tools())
     tools.extend(build_web_tools())
+    tools.extend(build_notion_tools())
+    tools.extend(build_github_tools())
 
     # Wrap compound skills. Email + web_fetch + web_researcher are
     # superseded by atomic primitives above.

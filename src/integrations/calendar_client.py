@@ -31,13 +31,16 @@ class CalendarClient:
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
 
+        # Don't pass scopes — google-auth forwards them to the refresh
+        # endpoint, and Google returns invalid_scope when they don't match
+        # the originally-granted scopes. The refresh token already encodes
+        # the granted scopes.
         creds = Credentials(
             token=None,
             refresh_token=settings.gcal_refresh_token,
             client_id=settings.gcal_client_id,
             client_secret=settings.gcal_client_secret,
             token_uri="https://oauth2.googleapis.com/token",
-            scopes=self.SCOPES,
         )
         self._service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         return self._service

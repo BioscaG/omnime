@@ -319,8 +319,17 @@ class Orchestrator:
         # Natural-language TASK → agentic primitives loop.
         return await self._run_agentic_loop(user_id, message, context)
 
-    AGENTIC_MAX_STEPS = 5
+    AGENTIC_MAX_STEPS = 8
     AGENTIC_MODEL_TIER = "fast"  # Sonnet 4.6 — strong reasoning without Opus cost
+
+    # Heuristic: tasks that compose 3+ verbs or span multiple domains often
+    # need more than the default 5 tool calls. We bump the cap to the hard
+    # limit on detection so the agent doesn't bail mid-plan.
+    _COMPLEX_TASK_RE = re.compile(
+        r"(\b(y|and|luego|then|después|after that|tras eso)\b.*){2,}|"
+        r"\b(planifica|plan my|prepárame|prepare me|investiga.+y|research.+and)\b",
+        re.I | re.S,
+    )
 
     async def _run_agentic_loop(
         self,
@@ -400,7 +409,13 @@ class Orchestrator:
         last_inline_buttons: list = []
         last_files: list = []
 
-        for step in range(self.AGENTIC_MAX_STEPS):
+        # Tier escalation: complex compound requests get the full step budget;
+        # short single-intent messages cap earlier to keep cost bounded.
+        max_steps = self.AGENTIC_MAX_STEPS
+        if not self._COMPLEX_TASK_RE.search(message or ""):
+            max_steps = min(max_steps, 5)
+
+        for step in range(max_steps):
             try:
                 result = await self.llm.agentic_step(
                     messages=history,

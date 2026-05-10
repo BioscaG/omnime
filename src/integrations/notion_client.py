@@ -110,6 +110,80 @@ class NotionClient:
             if r.status_code >= 400:
                 logger.warning("Notion archive failed for %s: %s", pid, r.text)
 
+    async def search(self, query: str, page_size: int = 10) -> list[dict[str, Any]]:
+        """Search across the Notion workspace (pages + databases)."""
+        client = await self._http()
+        r = await client.post("/search", json={"query": query, "page_size": page_size})
+        r.raise_for_status()
+        return r.json().get("results", [])
+
+    async def get_page(self, page_id: str) -> dict[str, Any]:
+        client = await self._http()
+        r = await client.get(f"/pages/{page_id}")
+        r.raise_for_status()
+        return r.json()
+
+    async def get_block_children(self, block_id: str, page_size: int = 100) -> list[dict[str, Any]]:
+        """Walk the block tree under a page to extract its rendered text."""
+        client = await self._http()
+        r = await client.get(f"/blocks/{block_id}/children", params={"page_size": page_size})
+        r.raise_for_status()
+        return r.json().get("results", [])
+
+    async def page_text(self, page_id: str, max_blocks: int = 80) -> str:
+        """Return a flat plain-text rendering of a page's body."""
+        try:
+            blocks = await self.get_block_children(page_id, page_size=max_blocks)
+        except Exception as exc:
+            logger.warning("get_block_children failed for %s: %s", page_id, exc)
+            return ""
+        out: list[str] = []
+        for b in blocks[:max_blocks]:
+            t = b.get("type")
+            payload = b.get(t) or {}
+            chunks = payload.get("rich_text") or []
+            text = "".join(c.get("plain_text") or "" for c in chunks)
+            if not text:
+                continue
+            if t in ("heading_1", "heading_2", "heading_3"):
+                out.append(f"# {text}")
+            elif t == "bulleted_list_item":
+                out.append(f"- {text}")
+            elif t == "numbered_list_item":
+                out.append(f"1. {text}")
+            elif t == "to_do":
+                checked = payload.get("checked")
+                marker = "[x]" if checked else "[ ]"
+                out.append(f"{marker} {text}")
+            else:
+                out.append(text)
+        return "\n".join(out)
+
+    async def create_page(self, parent_page_id: str, title_value: str, body: str | None = None) -> dict[str, Any]:
+        client = await self._http()
+        properties = {
+            "title": {"title": [{"type": "text", "text": {"content": title_value}}]},
+        }
+        children = []
+        if body:
+            children.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": body}}],
+                },
+            })
+        r = await client.post(
+            "/pages",
+            json={
+                "parent": {"type": "page_id", "page_id": parent_page_id},
+                "properties": properties,
+                "children": children,
+            },
+        )
+        r.raise_for_status()
+        return r.json()
+
 
 def _rich_text(value: str) -> dict[str, Any]:
     return {"rich_text": [{"type": "text", "text": {"content": value}}]}

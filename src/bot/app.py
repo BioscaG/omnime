@@ -254,6 +254,22 @@ def _schedule_jobs(application: Application, memory: MemoryManager, llm: LLMClie
     job_queue.run_repeating(notion_sync_job, interval=60 * 60 * 6, first=60 * 30)
     job_queue.run_daily(birthday_reminder_job, time=dtime_(hour=8, minute=15))
 
+    if settings.proactive_enabled:
+        async def proactive_job(context):
+            try:
+                from src.brain.proactive import proactive_scan
+
+                await proactive_scan(application, memory, llm, user_id_db)
+            except Exception as exc:
+                logger.warning("Proactive scan failed: %s", exc)
+
+        # First run after 5 min so we don't ping right at boot.
+        job_queue.run_repeating(
+            proactive_job,
+            interval=settings.proactive_interval_minutes * 60,
+            first=5 * 60,
+        )
+
     if settings.backup_enabled:
         try:
             bhh, bmm = (int(x) for x in settings.backup_at.split(":"))

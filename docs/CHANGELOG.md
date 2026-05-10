@@ -4,6 +4,46 @@ OMNIME no usa versionado semántico todavía — cada release está marcada por 
 commit. Esta es la lista cronológica de los hitos importantes desde que el
 proyecto pasó de scaffolding a su estado actual.
 
+## 2026-05-10 — DIOS reach: calendar/notion/github primitives + proactive scanner + longer loop
+
+The bot now spans the full life: email + memory + web + **calendar +
+notion + github**, plus an autonomous scanner that pings the user when
+something deserves attention.
+
+**Calendar primitives** (`src/tools/calendar_tools.py`):
+- `calendar_list` — events in a window
+- `calendar_create` — schedule with attendees + threading-aware invites
+- `calendar_check_availability` — verify free slot before booking
+
+**Notion primitives** (`src/tools/notion_tools.py`):
+- `notion_search` — workspace search (pages + databases)
+- `notion_read_page` — full plain-text body
+- `notion_create_note` — child page under any parent
+
+`NotionClient` extended with `search`, `get_page`, `get_block_children`,
+`page_text`, `create_page`.
+
+**GitHub primitives** (`src/tools/github_tools.py`):
+- `github_list_issues` / `github_list_pulls` (filter by state)
+- `github_create_issue`
+
+**Proactive scanner** (`src/brain/proactive.py`): runs every 30 min,
+collects signals (urgent unread mail, calendar events in next 4 hours,
+projects without recent activity), asks Haiku to decide if anything is
+worth interrupting the user, and pings if so. Bias toward silence; per-
+signal 6-hour cooldown avoids spam. Configurable via `PROACTIVE_ENABLED`,
+`PROACTIVE_INTERVAL_MINUTES`, `PROACTIVE_CHAT_ID`.
+
+**Loop budget bumped** from 5 to 8 tool calls — with tier escalation:
+short single-intent messages still cap at 5; compound requests
+('plan my week', 'investiga X y guárdamelo y prepárame para la
+entrevista') get the full budget. Heuristic: detects 2+ conjunctions or
+plan/research/prep verbs.
+
+Scope fix: removed the hardcoded `scopes=` from `CalendarClient`
+credentials (same fix as `GmailClient`) — Google was rejecting refresh
+with `invalid_scope` when the original consent had a narrower set.
+
 ## 2026-05-10 — pure-primitives architecture (DIOS mode)
 
 The agentic loop now sees ONE flat catalog of tool primitives — no more

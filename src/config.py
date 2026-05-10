@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     enable_prompt_caching: bool = Field(default=True, alias="ENABLE_PROMPT_CACHING")
     enable_streaming: bool = Field(default=True, alias="ENABLE_STREAMING")
 
+    # --- Proactive scanner ---
+    proactive_enabled: bool = Field(default=True, alias="PROACTIVE_ENABLED")
+    proactive_interval_minutes: int = Field(default=30, alias="PROACTIVE_INTERVAL_MINUTES")
+    proactive_chat_id: int = Field(default=0, alias="PROACTIVE_CHAT_ID")
+
     # --- Browser agent tuning ---
     # Tier for the per-step decision LLM. `tiny` (Haiku) is ~5× cheaper than
     # `fast` (Sonnet) and usually enough for clicking through forms.

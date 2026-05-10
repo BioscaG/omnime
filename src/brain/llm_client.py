@@ -109,6 +109,45 @@ class LLMError(Exception):
     pass
 
 
+def _add_message_cache_breakpoint(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mark the long tail of the conversation as cacheable.
+
+    Anthropic's prompt cache is a huge win for the agentic loop: once we
+    have a few-turn conversation the bulk of the history is the same on
+    every subsequent call. We add a single ``cache_control`` breakpoint at
+    the end of the second-to-last message — Anthropic caches everything up
+    to and including that block, and only the latest user turn pays full
+    input price.
+
+    No breakpoint when the conversation is shorter than 2 messages
+    (nothing meaningful to cache yet).
+    """
+    if len(messages) < 2:
+        return messages
+    out: list[dict[str, Any]] = []
+    cache_target_idx = len(messages) - 2
+    for i, msg in enumerate(messages):
+        if i != cache_target_idx:
+            out.append(msg)
+            continue
+        # Normalise content to list-of-blocks so we can attach cache_control.
+        content = msg.get("content")
+        if isinstance(content, str):
+            blocks: list[dict[str, Any]] = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            blocks = [
+                (b if isinstance(b, dict) else {"type": "text", "text": str(b)})
+                for b in content
+            ]
+        else:
+            blocks = [{"type": "text", "text": str(content)}]
+        if blocks:
+            # cache_control goes on the LAST content block.
+            blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+        out.append({**msg, "content": blocks})
+    return out
+
+
 class LLMClient:
     """Provider-agnostic LLM client.
 
@@ -598,11 +637,18 @@ class LLMClient:
                 entry["cache_control"] = {"type": "ephemeral"}
             tool_payload.append(entry)
 
+        # Cache the long tail of the message history so repeated turns
+        # within a session pay 10% of input price for everything except
+        # the latest user input + tool calls. Caches the second-to-last
+        # message block — Anthropic considers everything up to and
+        # including that block cacheable.
+        cached_messages = _add_message_cache_breakpoint(messages)
+
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "tools": tool_payload,
-            "messages": messages,
+            "messages": cached_messages,
         }
         if self._supports_temperature(model):
             kwargs["temperature"] = temperature

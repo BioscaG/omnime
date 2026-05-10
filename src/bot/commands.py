@@ -82,6 +82,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all projects, or `/projects <name>` for full detail of one."""
     if not await authorize(update, context):
         return
     memory = context.application.bot_data["memory"]
@@ -91,10 +92,48 @@ async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not projects:
         await safe_send(update.effective_message.reply_text, "No projects stored yet.")
         return
+
+    query = " ".join(context.args or []).strip().lower()
+    if query:
+        # Detail view: find a project whose name fuzzily matches the query.
+        match = next(
+            (p for p in projects if query in (p.get("name") or "").lower()),
+            None,
+        )
+        if match is None:
+            await safe_send(
+                update.effective_message.reply_text,
+                f"No project matched **{query}**. Try `/projects` for the full list.",
+            )
+            return
+        lines = [f"**{match['name']}** ({match.get('status') or 'unknown'})"]
+        if match.get("description"):
+            lines.append(f"\n{match['description']}")
+        if match.get("role"):
+            lines.append(f"\n**Role:** {match['role']}")
+        if match.get("technologies"):
+            lines.append(f"**Tech:** {', '.join(match['technologies'])}")
+        if match.get("start_date") or match.get("end_date"):
+            lines.append(
+                f"**Dates:** {match.get('start_date') or '?'} → {match.get('end_date') or 'ongoing'}"
+            )
+        if match.get("key_achievements"):
+            lines.append("\n**Key achievements:**")
+            for a in match["key_achievements"]:
+                lines.append(f"  - {a}")
+        if match.get("details"):
+            lines.append(f"\n**Details:**\n{match['details']}")
+        await safe_send(update.effective_message.reply_text, "\n".join(lines))
+        return
+
+    # List view: name + short description, with hint to drill in.
     lines = []
     for p in projects:
         tech = ", ".join(p.get("technologies") or []) or "—"
-        lines.append(f"• **{p['name']}** ({p.get('status')}) — {p.get('description') or ''}\n  tech: {tech}")
+        lines.append(
+            f"• **{p['name']}** ({p.get('status')}) — {p.get('description') or ''}\n  tech: {tech}"
+        )
+    lines.append("\n_Tip: `/projects <name>` for full detail._")
     await safe_send(update.effective_message.reply_text, "\n\n".join(lines))
 
 

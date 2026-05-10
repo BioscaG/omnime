@@ -165,12 +165,23 @@ class EntityExtractor:
             context=context or "(no context)",
             message=message,
         )
+        # Tier escalation: short messages → Haiku (cheap, fine for atomic
+        # facts). Longer or denser messages — typical when the user is
+        # explaining a project in depth — go to Sonnet for richer capture
+        # of description/key_achievements/technologies/details.
+        tier = "fast" if len(message) >= 200 else "tiny"
         try:
             raw = await self.llm.complete(
                 prompt=prompt,
-                system="You return only valid JSON, nothing else.",
-                model_tier="tiny",
-                max_tokens=2000,
+                system=(
+                    "You return only valid JSON, nothing else. When the user "
+                    "explains something in depth, capture EVERY meaningful "
+                    "detail — fill description, details, key_achievements, "
+                    "technologies, etc. with full information from the "
+                    "message. Don't reduce rich explanations to one-word names."
+                ),
+                model_tier=tier,
+                max_tokens=2500,
             )
         except Exception as exc:
             logger.warning("LLM extraction failed: %s", exc)
